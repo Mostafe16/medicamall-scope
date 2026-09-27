@@ -1,28 +1,56 @@
 """Pull the latest exam-screen web app from the Medica Mall site and bundle it into the APK."""
-import base64, gzip, os, re, sys, time, urllib.request
+import base64, gzip, os, re, sys, time, urllib.request, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(ROOT, 'app', 'src', 'main', 'assets')
 MIPMAP = os.path.join(ROOT, 'app', 'src', 'main', 'res', 'mipmap-xxxhdpi')
 
-url = os.environ.get('WEB_URL', 'https://medicamall.com/ent-scope')
-if url.startswith('http'):
-    url += ('&' if '?' in url else '?') + 'v=' + os.environ.get('GITHUB_RUN_ID', str(int(time.time())))
-req = urllib.request.Request(url, headers={
+BASE_URL = os.environ.get('WEB_URL', 'https://medicamall.com/ent-scope')
+HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-A536E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml',
     'Accept-Encoding': 'gzip',
     'Accept-Language': 'ar,en;q=0.8',
-})
-raw = urllib.request.urlopen(req, timeout=90).read()
-if raw[:2] == b'\x1f\x8b':
-    raw = gzip.decompress(raw)
-page = raw.decode('utf-8', 'replace')
+}
 
-m = re.search(r'var B64 = "([^"]+)"', page)
-if not m:
-    sys.exit('ERROR: exam-screen code (var B64) not found on %s – got %d bytes' % (url, len(page)))
-app = base64.b64decode(m.group(1)).decode('utf-8')
+
+def fetch_app():
+    """Exam-screen HTML from the live page (a few retries; Cloudflare sometimes answers with a challenge page)."""
+    for attempt in range(6):
+        url = BASE_URL
+        if url.startswith('http') and attempt % 2 == 0:
+            url += ('&' if '?' in url else '?') + 'v=' + os.environ.get('GITHUB_RUN_ID', str(int(time.time()))) + str(attempt)
+        try:
+            raw = urllib.request.urlopen(urllib.request.Request(url, headers=HEADERS), timeout=90).read()
+            if raw[:2] == b'\x1f\x8b':
+                raw = gzip.decompress(raw)
+            page = raw.decode('utf-8', 'replace')
+            m = re.search(r'var B64 = "([^"]+)"', page)
+            if m:
+                return base64.b64decode(m.group(1)).decode('utf-8')
+            print('attempt %d: B64 not found (%d bytes)' % (attempt + 1, len(page)))
+        except Exception as e:
+            print('attempt %d: %s' % (attempt + 1, e))
+        time.sleep(float(os.environ.get("RETRY_SLEEP","15")))
+    return None
+
+
+def from_previous_apk():
+    """Fallback: reuse the exam screen bundled in the last published APK."""
+    apk = os.environ.get('PREV_APK', '/tmp/prev.apk')
+    if not os.path.exists(apk):
+        return None
+    with zipfile.ZipFile(apk) as z:
+        html = z.read('assets/index.html').decode('utf-8')
+    return html.replace('<script src="native-shim.js"></script>', '', 1)
+
+
+app = fetch_app()
+if app is None:
+    app = from_previous_apk()
+    if app is None:
+        sys.exit('ERROR: could not get the exam screen from the site or the previous APK')
+    print('::warning::Site not reachable - reused exam screen from the previous APK')
 
 if '<head>' in app:
     app = app.replace('<head>', '<head><script src="native-shim.js"></script>', 1)
