@@ -90,9 +90,24 @@
     btnT = setTimeout(function () { btnT = null; clickId('btnSnap'); }, 400);
   };
 
+  /* new exam-screen version downloaded in the background */
+  var showUpdateBar = function () {
+    if (document.getElementById('mmUpd')) return;
+    var d = document.createElement('div');
+    d.id = 'mmUpd';
+    d.style.cssText = 'position:fixed;left:10px;right:10px;top:10px;z-index:99999;background:#0a3f7d;color:#fff;border-radius:14px;padding:10px 12px;display:flex;align-items:center;gap:10px;font:14px/1.5 system-ui,sans-serif;box-shadow:0 8px 24px rgba(10,63,125,.35);direction:rtl';
+    d.innerHTML = '<div style="flex:1"><b>✨ فيه تحديث لشاشة الكشف</b><br><span style="color:#cfe6fb;font-size:12.5px">المرضى والصور مش هتتأثر</span></div>'
+      + '<button id="mmUpdGo" style="background:#ffc233;color:#0a3f7d;border:0;border-radius:999px;padding:8px 14px;font-weight:800">تحديث دلوقتي</button>'
+      + '<button id="mmUpdX" style="background:transparent;border:0;color:#cfe6fb;font-size:20px">×</button>';
+    document.body.appendChild(d);
+    document.getElementById('mmUpdGo').onclick = function () { N.reloadWeb(); };
+    document.getElementById('mmUpdX').onclick = function () { d.remove(); };
+  };
+
   /* events from Android */
   window.__besNative = function (evt) {
     if (evt === 'button') { onButton(); return; }
+    if (evt === 'webupdate') { showUpdateBar(); return; }
     if ((evt === 'detached' || evt === 'closed') && active) active.end();
     if (evt === 'open') N.toast('المنظار اتوصل ✔');
     try { md && md.dispatchEvent(new Event('devicechange')); } catch (e) {}
