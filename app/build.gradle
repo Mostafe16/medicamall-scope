@@ -1,0 +1,58 @@
+plugins {
+    id 'com.android.application'
+}
+
+def runNo = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as Integer
+def ksFile = System.getenv('KS_FILE')
+
+android {
+    namespace 'com.medicamall.scope'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.medicamall.scope'
+        minSdk 24
+        // 33 on purpose: avoids Android 14 receiver-export crashes inside the UVC library
+        targetSdk 33
+        versionCode runNo
+        versionName "1.0.${runNo}"
+    }
+
+    signingConfigs {
+        release {
+            if (ksFile) {
+                storeFile file(ksFile)
+                storePassword System.getenv('KS_PASS')
+                keyAlias 'medicamall'
+                keyPassword System.getenv('KS_PASS')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig ksFile ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        jniLibs { useLegacyPackaging true }
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
+
+dependencies {
+    implementation 'com.herohan:UVCAndroid:1.0.13'
+    implementation 'androidx.webkit:webkit:1.10.0'
+    implementation 'androidx.core:core:1.12.0'
+}
