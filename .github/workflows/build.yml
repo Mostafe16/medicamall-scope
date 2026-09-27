@@ -29,6 +29,11 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Get previous APK (fallback if the site is unreachable)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download app -p MedicaMall-Scope.apk -O /tmp/prev.apk || true
+
       - name: Pull latest exam screen from medicamall.com
         run: python3 tools/prepare_web.py
 
