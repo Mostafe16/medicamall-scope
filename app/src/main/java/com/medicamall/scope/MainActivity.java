@@ -123,6 +123,16 @@ public class MainActivity extends Activity {
                 if (HOST.equals(u.getHost()) && u.getPath() != null && u.getPath().startsWith("/uvc/")) {
                     return frameResponse();
                 }
+                if (HOST.equals(u.getHost()) && "/assets/index.html".equals(u.getPath())) {
+                    File wf = Updates.webFile(MainActivity.this);
+                    if (wf.exists()) {
+                        try {
+                            Map<String, String> hd = new HashMap<>();
+                            hd.put("Cache-Control", "no-cache");
+                            return new WebResourceResponse("text/html", "utf-8", 200, "OK", hd, new FileInputStream(wf));
+                        } catch (Exception ignored) { }
+                    }
+                }
                 return assets.shouldInterceptRequest(u);
             }
 
@@ -191,6 +201,8 @@ public class MainActivity extends Activity {
         initCam();
         handleUsbIntent(getIntent());
         ui.postDelayed(this::openFirstUvc, 1200);
+        Updates.checkWeb(this, () -> js("webupdate"));
+        Updates.checkApp(this);
     }
 
     // ================= permissions =================
@@ -578,6 +590,9 @@ public class MainActivity extends Activity {
         public void openExternal(String url) { MainActivity.this.openExternal(url); }
 
         @JavascriptInterface
+        public void reloadWeb() { ui.post(() -> web.reload()); }
+
+        @JavascriptInterface
         public void toast(String msg) { MainActivity.this.toast(msg); }
     }
 
@@ -598,6 +613,12 @@ public class MainActivity extends Activity {
             return;
         }
         super.onBackPressed();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        Updates.onResume(this);
     }
 
     @Override
