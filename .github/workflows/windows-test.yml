@@ -1,0 +1,43 @@
+name: Build Windows button test
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: dotnet build windows/ButtonTest/ButtonTest.csproj -c Release -o out
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Remove-Item out\*.pdb -ErrorAction SilentlyContinue
+          Compress-Archive -Path out\* -DestinationPath BesdataButtonTest.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BesdataButtonTest
+          path: BesdataButtonTest.zip
+
+      - name: Publish download link
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view win-test >/dev/null 2>&1; then
+            gh release upload win-test BesdataButtonTest.zip --clobber
+          else
+            gh release create win-test BesdataButtonTest.zip --title "Besdata button test (Windows)" --notes "Test tool: does the scope button reach Windows?" --latest=false
+          fi
