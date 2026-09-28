@@ -32,12 +32,15 @@ namespace MedicaMallScope
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            if (Installer.RunInstalledCopyIfNeeded()) return;
-            bool first;
+            bool background = Environment.GetCommandLineArgs().Any(a => a == "--background");
+            if (!background && Installer.RunInstalledCopyIfNeeded()) return;
+            bool created, first;
+            using (var showEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "MedicaMallScope_Show", out created))
             using (var mutex = new Mutex(true, "MedicaMallScope_SingleInstance", out first))
             {
-                if (!first) { MessageBox.Show("البرنامج مفتوح بالفعل.", "Medica Mall", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-                Application.Run(new MainForm());
+                // already running (maybe hidden in the tray): ask it to show its window
+                if (!first) { if (!background) showEvt.Set(); return; }
+                Application.Run(new MainForm(background, showEvt));
             }
         }
     }
@@ -407,7 +410,7 @@ namespace MedicaMallScope
             catch (Exception ex) { Paths.Log("web update: " + ex.Message); return false; }
         }
 
-        public static async Task CheckAppAsync(Form owner)
+        public static async Task CheckAppAsync(MainForm owner)
         {
             try
             {
@@ -441,25 +444,33 @@ namespace MedicaMallScope
                     "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand " + Convert.ToBase64String(Encoding.Unicode.GetBytes(ps)))
                 { UseShellExecute = false, CreateNoWindow = true });
                 Paths.Log("updating to " + latest);
-                owner.Close();
+                owner.ExitApp();
             }
             catch (Exception ex) { Paths.Log("app update: " + ex.Message); }
         }
     }
 
-    // ---------------------------------------------------------------- main window
+    // ---------------------------------------------------------------- main window (+ tray: opens by itself when the scope is plugged in)
     class MainForm : Form
     {
         const string Host = "https://scope.medicamall.local";
+        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run", RunName = "MedicaMallScope";
         readonly WebView2 web = new WebView2 { Dock = DockStyle.Fill };
         readonly ScopeCamera cam = new ScopeCamera();
         readonly System.Windows.Forms.Timer poll = new System.Windows.Forms.Timer { Interval = 2000 };
+        readonly NotifyIcon tray = new NotifyIcon();
+        readonly ToolStripMenuItem autoItem = new ToolStripMenuItem("يفتح لوحده مع Windows ولما المنظار يتوصل");
         CoreWebView2Environment env;
         string shim = "";
-        DateTime nextStartTry = DateTime.MinValue;
+        DateTime nextStartTry = DateTime.MinValue, lastUpdateCheck = DateTime.MinValue;
+        bool allowShow, inited, exiting, lastPresent, balloonShown;
 
-        public MainForm()
+        static string AutoOffFlag { get { return Path.Combine(Paths.Root, "autostart-off"); } }
+
+        public MainForm(bool background, EventWaitHandle showEvt)
         {
+            allowShow = !background;
+            lastPresent = !background; // started in the background: a scope that is already plugged in opens the window
             Text = "Medica Mall – شاشة كشف منظار الأنف والأذن";
             Width = 1280; Height = 820; StartPosition = FormStartPosition.CenterScreen; WindowState = FormWindowState.Maximized;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
@@ -470,10 +481,117 @@ namespace MedicaMallScope
                 using (var r = new StreamReader(s, Encoding.UTF8)) shim = r.ReadToEnd();
             }
             catch (Exception ex) { Paths.Log("shim: " + ex.Message); }
+
+            // tray icon
+            var menu = new ContextMenuStrip { RightToLeft = RightToLeft.Yes };
+            menu.Items.Add("فتح شاشة الكشف", null, (s, e) => ShowApp());
+            autoItem.Checked = !File.Exists(AutoOffFlag);
+            autoItem.Click += (s, e) => SetAutoStart(!autoItem.Checked);
+            menu.Items.Add(autoItem);
+            menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("خروج نهائي", null, (s, e) => ExitApp());
+            tray.Icon = Icon ?? SystemIcons.Application;
+            tray.Text = "Medica Mall Scope";
+            tray.ContextMenuStrip = menu;
+            tray.Visible = true;
+            tray.DoubleClick += (s, e) => ShowApp();
+            SetAutoStart(autoItem.Checked);
+
             cam.Button += () => { try { BeginInvoke(new Action(() => Event("button"))); } catch { } };
-            Load += async (s, e) => await InitAsync();
-            FormClosing += (s, e) => { poll.Stop(); cam.Stop(); };
-            Paths.Log("start " + Assembly.GetExecutingAssembly().GetName().Version + " from " + Paths.ExeDir);
+            Shown += (s, e) => EnsureInit();
+            FormClosing += OnClosing;
+            poll.Tick += (s, e) => Tick();
+            poll.Start();
+
+            // another launch (desktop icon) while we run hidden -> show this window
+            var t = new Thread(() =>
+            {
+                while (true)
+                {
+                    try { showEvt.WaitOne(); BeginInvoke(new Action(ShowApp)); } catch { Thread.Sleep(1000); }
+                }
+            }) { IsBackground = true };
+            t.Start();
+            Paths.Log("start " + Assembly.GetExecutingAssembly().GetName().Version + " from " + Paths.ExeDir + (background ? " (background)" : ""));
+        }
+
+        protected override void SetVisibleCore(bool value)
+        {
+            if (!allowShow)
+            {
+                value = false;
+                if (!IsHandleCreated) CreateHandle();
+            }
+            base.SetVisibleCore(value);
+        }
+
+        public void ShowApp()
+        {
+            allowShow = true;
+            if (!Visible) Show();
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Maximized;
+            TopMost = true; TopMost = false;
+            Activate();
+            EnsureInit();
+            BeginInvoke(new Action(Tick));
+            if (inited && web.CoreWebView2 != null && DateTime.Now - lastUpdateCheck > TimeSpan.FromHours(6)) CheckUpdates();
+        }
+
+        public void ExitApp()
+        {
+            exiting = true;
+            try { tray.Visible = false; tray.Dispose(); } catch { }
+            Close();
+        }
+
+        void OnClosing(object sender, FormClosingEventArgs e)
+        {
+            if (!exiting && e.CloseReason == CloseReason.UserClosing)
+            {
+                // keep running in the tray: release the scope, open again automatically when it is plugged in
+                e.Cancel = true;
+                Hide();
+                allowShow = false;
+                if (cam.Running) { cam.Stop(); Event("detached"); }
+                if (!balloonShown)
+                {
+                    balloonShown = true;
+                    try { tray.ShowBalloonTip(5000, "Medica Mall Scope", "البرنامج شغال في الخلفية وهيفتح لوحده أول ما توصّل المنظار.", ToolTipIcon.Info); } catch { }
+                }
+                return;
+            }
+            poll.Stop(); cam.Stop();
+            try { tray.Visible = false; } catch { }
+        }
+
+        void SetAutoStart(bool on)
+        {
+            try
+            {
+                Directory.CreateDirectory(Paths.Root);
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(RunKey, true) ?? Microsoft.Win32.Registry.CurrentUser.CreateSubKey(RunKey))
+                {
+                    if (on)
+                    {
+                        k.SetValue(RunName, "\"" + Application.ExecutablePath + "\" --background");
+                        if (File.Exists(AutoOffFlag)) File.Delete(AutoOffFlag);
+                    }
+                    else
+                    {
+                        k.DeleteValue(RunName, false);
+                        File.WriteAllText(AutoOffFlag, "1");
+                    }
+                }
+                autoItem.Checked = on;
+            }
+            catch (Exception ex) { Paths.Log("autostart: " + ex.Message); }
+        }
+
+        void EnsureInit()
+        {
+            if (inited) return;
+            inited = true;
+            var _ = InitAsync();
         }
 
         async Task InitAsync()
@@ -489,7 +607,7 @@ namespace MedicaMallScope
                 if (MessageBox.Show(this, "البرنامج محتاج «Microsoft Edge WebView2 Runtime» (مجاني من مايكروسوفت).\nأفتح صفحة التحميل؟",
                         "Medica Mall", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                     OpenExternal("https://go.microsoft.com/fwlink/p/?LinkId=2124703");
-                Close();
+                ExitApp();
                 return;
             }
             var cw = web.CoreWebView2;
@@ -518,17 +636,19 @@ namespace MedicaMallScope
                 try { m = e.TryGetWebMessageAsString(); } catch { }
                 if (m == "reloadWeb") cw.Reload();
             };
-            bool hadApp = WebApp.Raw() != null;
             cw.Navigate(Host + "/index.html");
+            Tick();
+            CheckUpdates();
+        }
 
-            poll.Tick += (s, e) => CheckDevice();
-            poll.Start();
-            CheckDevice();
-
+        async void CheckUpdates()
+        {
+            lastUpdateCheck = DateTime.Now;
+            bool hadApp = WebApp.Raw() != null;
             if (await Updates.CheckWebAsync())
             {
                 if (hadApp) Event("webupdate");
-                else cw.Reload();
+                else if (web.CoreWebView2 != null) web.CoreWebView2.Reload();
             }
             await Updates.CheckAppAsync(this);
         }
@@ -587,22 +707,34 @@ namespace MedicaMallScope
             catch { }
         }
 
-        void CheckDevice()
+        void Tick()
         {
             DsDevice dev = null;
             try { dev = ScopeCamera.Find(); } catch { }
-            if (cam.Running && (dev == null || dev.DevicePath != cam.DevicePath))
+            bool present = dev != null, arrived = present && !lastPresent;
+            lastPresent = present;
+            try
             {
-                cam.Stop();
-                Paths.Log("scope detached");
-                Event("detached");
+                if (!Visible)
+                {
+                    // hidden in the tray: don't hold the scope; plugging it in opens the window
+                    if (cam.Running) cam.Stop();
+                    if (arrived) { Paths.Log("scope plugged in -> opening"); ShowApp(); }
+                    return;
+                }
+                if (cam.Running && (dev == null || dev.DevicePath != cam.DevicePath))
+                {
+                    cam.Stop();
+                    Paths.Log("scope detached");
+                    Event("detached");
+                }
+                if (!cam.Running && dev != null && DateTime.Now >= nextStartTry)
+                {
+                    if (cam.Start(dev)) Event("open");
+                    else nextStartTry = DateTime.Now.AddSeconds(10);
+                }
             }
-            if (!cam.Running && dev != null && DateTime.Now >= nextStartTry)
-            {
-                if (cam.Start(dev)) Event("open");
-                else nextStartTry = DateTime.Now.AddSeconds(10);
-            }
-            if (dev != null) dev.Dispose();
+            finally { if (dev != null) dev.Dispose(); }
         }
     }
 }
