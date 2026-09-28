@@ -3,6 +3,9 @@ name: Build Medica Mall Scope APK
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'windows/**'
+      - '.github/workflows/windows-test.yml'
   workflow_dispatch:
 
 permissions:
