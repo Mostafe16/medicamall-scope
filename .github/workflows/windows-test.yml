@@ -1,4 +1,4 @@
-name: Build Windows button test
+name: Build Windows
 
 on:
   push:
@@ -11,26 +11,69 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: windows-build
+  cancel-in-progress: true
+
 jobs:
-  build:
+  app:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bundle exam screen + icon
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pip install --quiet pillow
+          gh release download app -p MedicaMall-Scope.apk -O prev.apk --clobber || echo "no previous APK"
+          python windows/ScopeApp/prepare_web.py
+
       - name: Build
-        run: dotnet build windows/ButtonTest/ButtonTest.csproj -c Release -o out
+        run: dotnet build windows/ScopeApp/ScopeApp.csproj -c Release -o out -p:Version=1.0.${{ github.run_number }}
 
       - name: Package
         shell: pwsh
         run: |
           Remove-Item out\*.pdb -ErrorAction SilentlyContinue
-          Compress-Archive -Path out\* -DestinationPath BesdataButtonTest.zip -Force
+          if (!(Test-Path out\MedicaMallScope.exe)) { throw "exe missing" }
+          if (!(Test-Path out\web\index.html)) { throw "exam screen missing" }
+          Compress-Archive -Path out\* -DestinationPath MedicaMallScope.zip -Force
+          Set-Content -Path version.json -Value '{"version": ${{ github.run_number }}}' -Encoding ascii
+          Get-ChildItem out | Format-Table Name, Length
 
       - uses: actions/upload-artifact@v4
         with:
-          name: BesdataButtonTest
-          path: BesdataButtonTest.zip
+          name: MedicaMallScope
+          path: MedicaMallScope.zip
 
+      - name: Publish download link
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view win-app >/dev/null 2>&1; then
+            gh release upload win-app MedicaMallScope.zip version.json --clobber
+          else
+            gh release create win-app MedicaMallScope.zip version.json --title "Medica Mall Scope (Windows)" --notes "Windows app for the Besdata ENT scope" --latest=false
+          fi
+
+  button-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: dotnet build windows/ButtonTest/ButtonTest.csproj -c Release -o out
+      - name: Package
+        shell: pwsh
+        run: |
+          Remove-Item out\*.pdb -ErrorAction SilentlyContinue
+          Compress-Archive -Path out\* -DestinationPath BesdataButtonTest.zip -Force
       - name: Publish download link
         shell: bash
         env:
