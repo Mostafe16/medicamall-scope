@@ -10,12 +10,12 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId 'com.medicamall.scope'
+        applicationId 'com.medicamall.scope.wifitest'
         minSdk 24
         // 33 on purpose: avoids Android 14 receiver-export crashes inside the UVC library
         targetSdk 33
         versionCode runNo
-        versionName "1.0.${runNo}"
+        versionName "wifi-test.${runNo}"
     }
 
     signingConfigs {
