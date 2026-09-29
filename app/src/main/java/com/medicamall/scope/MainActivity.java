@@ -2,6 +2,9 @@ package com.medicamall.scope;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -24,6 +27,7 @@ import android.print.PrintAttributes;
 import android.print.PrintManager;
 import android.provider.MediaStore;
 import android.util.Base64;
+import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -35,6 +39,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
@@ -53,8 +58,15 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -65,10 +77,15 @@ public class MainActivity extends Activity {
     static final String ORIGIN = "https://" + HOST;
     static final String START_URL = ORIGIN + "/assets/index.html";
     static final int REQ_PERMS = 7, REQ_FILE = 42;
+    static final int WIFI_PORT = 8080;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private WebView web;
     private WebViewAssetLoader assets;
+    private Button wifiButton;
+    private WifiStreamServer wifiServer;
+    private byte[] wifiJpeg;
+    private long lastWifiEncode = 0;
 
     // ---- UVC camera ----
     private ICameraHelper cam;
@@ -98,9 +115,25 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         WebView.setWebContentsDebuggingEnabled(true);
 
+        FrameLayout root = new FrameLayout(this);
         web = new WebView(this);
         web.setBackgroundColor(Color.WHITE);
-        setContentView(web);
+        root.addView(web, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        wifiButton = new Button(this);
+        wifiButton.setAllCaps(false);
+        wifiButton.setText("Wi-Fi View");
+        wifiButton.setTextSize(12);
+        FrameLayout.LayoutParams wifiLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.END);
+        int margin = dp(14);
+        wifiLp.setMargins(margin, margin, margin, margin);
+        root.addView(wifiButton, wifiLp);
+        wifiButton.setOnClickListener(v -> toggleWifiStream());
+
+        setContentView(root);
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -202,7 +235,7 @@ public class MainActivity extends Activity {
         handleUsbIntent(getIntent());
         ui.postDelayed(this::openFirstUvc, 1200);
         Updates.checkWeb(this, () -> js("webupdate"));
-        Updates.checkApp(this);
+        // Side-by-side Wi-Fi test build: do not invoke the production APK updater.
     }
 
     // ================= permissions =================
@@ -416,6 +449,267 @@ public class MainActivity extends Activity {
         });
     }
 
+
+    // ================= Wi-Fi live view =================
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private void toggleWifiStream() {
+        if (wifiServer != null && wifiServer.isRunning()) {
+            stopWifiStream();
+            toast("تم إيقاف عرض Wi-Fi");
+            return;
+        }
+
+        WifiStreamServer server = new WifiStreamServer(WIFI_PORT);
+        if (!server.startServer()) {
+            toast("مقدرتش أشغل بث Wi-Fi على المنفذ " + WIFI_PORT);
+            return;
+        }
+        wifiServer = server;
+        wifiButton.setText("Wi-Fi ON");
+
+        String ip = localWifiIpv4();
+        final String url = ip == null ? null : "http://" + ip + ":" + WIFI_PORT + "/";
+        String message;
+        if (url == null) {
+            message = "البث شغال، لكن مفيش عنوان شبكة محلي واضح.\n"
+                    + "اتأكد إن الجهازين على نفس شبكة Wi-Fi ثم اقفل البث وشغله تاني.";
+        } else {
+            message = "افتح الرابط ده من اللابتوب أو أي جهاز على نفس شبكة Wi-Fi:\n\n"
+                    + url
+                    + "\n\nالبث محلي داخل الشبكة، والصورة فقط هي اللي بتتعرض.";
+        }
+
+        AlertDialog.Builder dialog = new AlertDialog.Builder(this)
+                .setTitle("Wi-Fi Live View")
+                .setMessage(message)
+                .setNegativeButton("إغلاق", null);
+        if (url != null) {
+            dialog.setPositiveButton("نسخ الرابط", (d, w) -> {
+                ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(ClipData.newPlainText("Medica Mall Scope Wi-Fi", url));
+                toast("تم نسخ الرابط");
+            });
+        }
+        dialog.show();
+    }
+
+    private void stopWifiStream() {
+        WifiStreamServer s = wifiServer;
+        wifiServer = null;
+        if (s != null) s.stopServer();
+        if (wifiButton != null) wifiButton.setText("Wi-Fi View");
+    }
+
+    private String localWifiIpv4() {
+        String fallback = null;
+        try {
+            for (NetworkInterface ni : Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                if (!ni.isUp() || ni.isLoopback()) continue;
+                String name = ni.getName() == null ? "" : ni.getName().toLowerCase();
+                for (InetAddress a : Collections.list(ni.getInetAddresses())) {
+                    if (!(a instanceof Inet4Address) || a.isLoopbackAddress() || !a.isSiteLocalAddress()) continue;
+                    String host = a.getHostAddress();
+                    if (name.startsWith("wlan") || name.startsWith("ap")
+                            || name.startsWith("wifi") || name.startsWith("eth")
+                            || name.startsWith("rndis")) {
+                        return host;
+                    }
+                    if (fallback == null) fallback = host;
+                }
+            }
+        } catch (Throwable ignored) { }
+        return fallback;
+    }
+
+    private synchronized byte[] latestWifiJpeg() {
+        if (!camOpen) return null;
+
+        long now = SystemClock.uptimeMillis();
+        if (wifiJpeg != null && now - lastWifiEncode < 120) return wifiJpeg;
+
+        byte[] copy;
+        int w, h;
+        synchronized (frameLock) {
+            if (frame == null) return null;
+            copy = new byte[frame.length];
+            System.arraycopy(frame, 0, copy, 0, frame.length);
+            w = fw;
+            h = fh;
+        }
+
+        try {
+            YuvImage yi = new YuvImage(copy, ImageFormat.NV21, w, h, null);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.max(64 * 1024, w * h / 6));
+            if (!yi.compressToJpeg(new Rect(0, 0, w, h), 76, bos)) return null;
+            wifiJpeg = bos.toByteArray();
+            lastWifiEncode = now;
+            return wifiJpeg;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private class WifiStreamServer extends Thread {
+        private final int port;
+        private volatile boolean running;
+        private ServerSocket server;
+
+        WifiStreamServer(int port) {
+            super("MedicaMall-WiFi-Stream");
+            this.port = port;
+        }
+
+        boolean startServer() {
+            try {
+                server = new ServerSocket(port);
+                server.setReuseAddress(true);
+                running = true;
+                start();
+                return true;
+            } catch (Exception e) {
+                running = false;
+                try { if (server != null) server.close(); } catch (Exception ignored) { }
+                return false;
+            }
+        }
+
+        boolean isRunning() {
+            return running;
+        }
+
+        void stopServer() {
+            running = false;
+            try { if (server != null) server.close(); } catch (Exception ignored) { }
+            interrupt();
+        }
+
+        @Override
+        public void run() {
+            while (running) {
+                try {
+                    Socket socket = server.accept();
+                    socket.setTcpNoDelay(true);
+                    new Thread(() -> handleClient(socket), "MedicaMall-WiFi-Client").start();
+                } catch (Exception e) {
+                    if (running) ui.post(() -> toast("اتوقف بث Wi-Fi"));
+                    break;
+                }
+            }
+            running = false;
+            ui.post(() -> {
+                if (wifiServer == this) {
+                    wifiServer = null;
+                    if (wifiButton != null) wifiButton.setText("Wi-Fi View");
+                }
+            });
+        }
+
+        private void handleClient(Socket socket) {
+            try (Socket s = socket) {
+                InputStream in = s.getInputStream();
+                OutputStream out = s.getOutputStream();
+
+                String first = readRequestLine(in);
+                String path = "/";
+                if (first != null) {
+                    String[] parts = first.split(" ");
+                    if (parts.length >= 2) path = parts[1];
+                }
+                drainHeaders(in);
+
+                if (path.startsWith("/stream.mjpg")) {
+                    streamMjpeg(out);
+                } else if (path.startsWith("/snapshot.jpg")) {
+                    serveSnapshot(out);
+                } else {
+                    serveViewer(out);
+                }
+            } catch (Throwable ignored) { }
+        }
+
+        private String readRequestLine(InputStream in) throws Exception {
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            int prev = -1;
+            for (int i = 0; i < 2048; i++) {
+                int c = in.read();
+                if (c < 0) break;
+                if (prev == '\r' && c == '\n') break;
+                if (c != '\r') b.write(c);
+                prev = c;
+            }
+            return b.toString("US-ASCII");
+        }
+
+        private void drainHeaders(InputStream in) throws Exception {
+            int state = 0;
+            for (int i = 0; i < 8192; i++) {
+                int c = in.read();
+                if (c < 0) return;
+                if (state == 0 && c == '\r') state = 1;
+                else if (state == 1 && c == '\n') state = 2;
+                else if (state == 2 && c == '\r') state = 3;
+                else if (state == 3 && c == '\n') return;
+                else state = 0;
+            }
+        }
+
+        private void serveViewer(OutputStream out) throws Exception {
+            String html = "<!doctype html><html><head><meta charset='utf-8'>"
+                    + "<meta name='viewport' content='width=device-width,initial-scale=1,maximum-scale=1'>"
+                    + "<title>Medica Mall Scope</title>"
+                    + "<style>html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden}"
+                    + "img{width:100%;height:100%;object-fit:contain;display:block}"
+                    + ".tag{position:fixed;top:10px;left:10px;background:#116eb5;color:#fff;"
+                    + "font:14px sans-serif;padding:7px 10px;border-radius:8px;opacity:.9}</style></head>"
+                    + "<body><img src='/stream.mjpg'><div class='tag'>Medica Mall Scope · Live</div></body></html>";
+            byte[] body = html.getBytes(StandardCharsets.UTF_8);
+            writeText(out, "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                    + "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                    + body.length + "\r\n\r\n");
+            out.write(body);
+            out.flush();
+        }
+
+        private void serveSnapshot(OutputStream out) throws Exception {
+            byte[] jpg = latestWifiJpeg();
+            if (jpg == null) {
+                writeText(out, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                        + "Cache-Control: no-store\r\nConnection: close\r\n\r\nWaiting for camera");
+                out.flush();
+                return;
+            }
+            writeText(out, "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nCache-Control: no-store\r\n"
+                    + "Connection: close\r\nContent-Length: " + jpg.length + "\r\n\r\n");
+            out.write(jpg);
+            out.flush();
+        }
+
+        private void streamMjpeg(OutputStream out) throws Exception {
+            writeText(out, "HTTP/1.1 200 OK\r\nConnection: close\r\nCache-Control: no-store, no-cache\r\n"
+                    + "Pragma: no-cache\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n");
+            while (running) {
+                byte[] jpg = latestWifiJpeg();
+                if (jpg == null) {
+                    SystemClock.sleep(150);
+                    continue;
+                }
+                writeText(out, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                        + jpg.length + "\r\n\r\n");
+                out.write(jpg);
+                writeText(out, "\r\n");
+                out.flush();
+                SystemClock.sleep(120);
+            }
+        }
+
+        private void writeText(OutputStream out, String text) throws Exception {
+            out.write(text.getBytes(StandardCharsets.US_ASCII));
+        }
+    }
+
     // ================= misc helpers =================
     private void openExternal(String url) {
         ui.post(() -> {
@@ -623,6 +917,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        stopWifiStream();
         camOpen = false;
         if (cam != null) {
             try { cam.release(); } catch (Throwable ignored) { }
