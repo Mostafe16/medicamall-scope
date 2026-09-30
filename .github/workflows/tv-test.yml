@@ -32,7 +32,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release download app -p MedicaMall-Scope.apk -O /tmp/prev.apk || true
 
-      - name: Pull latest exam screen
+      - name: Reuse stable exam screen for TV test
+        env:
+          WEB_URL: http://127.0.0.1:1
+          RETRY_SLEEP: "0"
+          PREV_APK: /tmp/prev.apk
         run: python3 tools/prepare_web.py
 
       - name: Build TV-box remote test APK
