@@ -101,6 +101,8 @@ public class MainActivity extends Activity {
 
     // ---- TV / remote UI ----
     private ImageView tvPreview;
+    private ImageView photoReview;
+    private boolean showingPhotoReview = false;
     private TextView tvStatus;
     private TextView scopeButtonIndicator;
     private int scopeButtonCount = 0;
@@ -185,13 +187,24 @@ public class MainActivity extends Activity {
         tvPreview = new ImageView(this);
         tvPreview.setBackgroundColor(Color.BLACK);
         tvPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        root.addView(tvPreview, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        FrameLayout.LayoutParams previewLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        previewLp.bottomMargin = dp(72);
+        root.addView(tvPreview, previewLp);
+
+        photoReview = new ImageView(this);
+        photoReview.setBackgroundColor(Color.BLACK);
+        photoReview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        photoReview.setVisibility(View.GONE);
+        FrameLayout.LayoutParams reviewLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+        reviewLp.bottomMargin = dp(72);
+        root.addView(photoReview, reviewLp);
 
         tvStatus = new TextView(this);
         tvStatus.setText("TV TEST • في انتظار المنظار");
         tvStatus.setTextColor(Color.WHITE);
-        tvStatus.setTextSize(18);
+        tvStatus.setTextSize(14);
         tvStatus.setPadding(dp(16), dp(10), dp(16), dp(10));
         tvStatus.setBackgroundColor(0xAA000000);
         FrameLayout.LayoutParams statusLp = new FrameLayout.LayoutParams(
@@ -203,7 +216,7 @@ public class MainActivity extends Activity {
         scopeButtonIndicator = new TextView(this);
         scopeButtonIndicator.setText("زرار المنظار: 0");
         scopeButtonIndicator.setTextColor(Color.WHITE);
-        scopeButtonIndicator.setTextSize(20);
+        scopeButtonIndicator.setTextSize(15);
         scopeButtonIndicator.setGravity(Gravity.CENTER);
         scopeButtonIndicator.setPadding(dp(18), dp(10), dp(18), dp(10));
         scopeButtonIndicator.setBackgroundColor(0xCC116EB5);
@@ -212,6 +225,7 @@ public class MainActivity extends Activity {
                 Gravity.TOP | Gravity.END);
         buttonIndicatorLp.setMargins(dp(14), dp(14), dp(14), dp(14));
         root.addView(scopeButtonIndicator, buttonIndicatorLp);
+        scopeButtonIndicator.setVisibility(View.GONE);
 
         captureFlash = new View(this);
         captureFlash.setBackgroundColor(Color.WHITE);
@@ -375,42 +389,31 @@ public class MainActivity extends Activity {
         try { list = cam.getSupportedSizeList(); } catch (Throwable ignored) { }
         if (list == null || list.isEmpty()) return null;
 
-        // Quality mode for the X96: use the largest MJPEG size that stays within
-        // roughly one megapixel. The first diagnostic build deliberately picked
-        // the smallest stream (400x400); the box proved stable at 30 FPS, so we
-        // can now step up quality without jumping straight to a multi-megapixel stream.
+        Size bestUncompressed = null;
         Size bestMjpeg = null;
         Size bestAny = null;
-        final int MAX_PIXELS = 1280 * 960;
         for (Size z : list) {
+            if (z == null) continue;
             int pixels = z.width * z.height;
-            if (pixels <= MAX_PIXELS) {
-                if (isMjpeg(z) && (bestMjpeg == null
-                        || pixels > bestMjpeg.width * bestMjpeg.height)) {
-                    bestMjpeg = z;
-                }
-                if (bestAny == null || pixels > bestAny.width * bestAny.height) {
-                    bestAny = z;
-                }
+            if (!isMjpeg(z) && (bestUncompressed == null
+                    || pixels > bestUncompressed.width * bestUncompressed.height
+                    || (pixels == bestUncompressed.width * bestUncompressed.height
+                    && z.fps > bestUncompressed.fps))) {
+                bestUncompressed = z;
             }
+            if (isMjpeg(z) && (bestMjpeg == null
+                    || pixels > bestMjpeg.width * bestMjpeg.height
+                    || (pixels == bestMjpeg.width * bestMjpeg.height
+                    && z.fps > bestMjpeg.fps))) {
+                bestMjpeg = z;
+            }
+            if (bestAny == null || pixels > bestAny.width * bestAny.height) bestAny = z;
         }
+        // The BESDATA unit tested on the X96 exposes 400x400 as both MJPEG and
+        // uncompressed. Prefer uncompressed because it avoids source JPEG artifacts.
+        if (bestUncompressed != null) return bestUncompressed;
         if (bestMjpeg != null) return bestMjpeg;
-        if (bestAny != null) return bestAny;
-
-        // If every advertised mode is larger, fall back to the smallest MJPEG
-        // rather than failing the camera open.
-        Size smallestMjpeg = null, smallestAny = null;
-        for (Size z : list) {
-            int pixels = z.width * z.height;
-            if (isMjpeg(z) && (smallestMjpeg == null
-                    || pixels < smallestMjpeg.width * smallestMjpeg.height)) {
-                smallestMjpeg = z;
-            }
-            if (smallestAny == null || pixels < smallestAny.width * smallestAny.height) {
-                smallestAny = z;
-            }
-        }
-        return smallestMjpeg != null ? smallestMjpeg : smallestAny;
+        return bestAny;
     }
 
     private void initCam() {
@@ -465,7 +468,7 @@ public class MainActivity extends Activity {
                 // The device is now fully opened; this is the reliable point to ask it
                 // for every UVC mode. If a higher mode exists, try one step above the
                 // default 400x400 automatically, with watchdog fallback.
-                ui.postDelayed(MainActivity.this::tryOneHigherQualityAutomatically, 700);
+                // TV stable build keeps the selected UVC mode fixed after open.
 
                 try {
                     VideoCaptureConfig vc = cam.getVideoCaptureConfig();
@@ -573,6 +576,8 @@ public class MainActivity extends Activity {
         long now = SystemClock.uptimeMillis();
         if (now - lastButton < 150) return; // hardware debounce
         lastButton = now;
+        // Keep the patient-session media logic in sync with the native TV capture.
+        js("button");
         ui.post(this::handleScopePressOnUi);
     }
 
@@ -581,8 +586,14 @@ public class MainActivity extends Activity {
         final int count = scopeButtonCount;
 
         if (scopeButtonIndicator != null && !videoRecording) {
-            scopeButtonIndicator.setText("زرار المنظار: " + count + " ✓");
+            scopeButtonIndicator.setVisibility(View.VISIBLE);
+            scopeButtonIndicator.setText("زر المنظار ✓");
             scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
+            ui.postDelayed(() -> {
+                if (!videoRecording && scopeButtonIndicator != null) {
+                    scopeButtonIndicator.setVisibility(View.GONE);
+                }
+            }, 900);
         }
 
         if (pendingSingleScopePress != null) {
@@ -602,88 +613,54 @@ public class MainActivity extends Activity {
 
     private void captureStillPhoto() {
         if (!camOpen || frame == null) {
-            updateTvStatus("الصورة لم تُحفظ • المنظار غير جاهز");
+            updateTvStatus("تعذر التصوير • المنظار غير جاهز");
             return;
         }
-        if (videoTransition) {
-            updateTvStatus("انتظر لحظة حتى يكتمل تغيير حالة التسجيل");
-            return;
-        }
+        if (videoTransition) return;
 
         byte[] copy;
         int w, h;
         synchronized (frameLock) {
-            if (frame == null) return;
             copy = new byte[frame.length];
             System.arraycopy(frame, 0, copy, 0, frame.length);
-            w = fw;
-            h = fh;
+            w = fw; h = fh;
         }
 
         flashCapture();
-        updateTvStatus("جاري حفظ الصورة...");
         previewExec.execute(() -> {
             String name = "Scope_" + fileStamp() + ".jpg";
-            File privateFile = null;
-            Uri galleryUri = null;
-            String publicPlace = null;
-            String error = null;
-
+            File dir = new File(getFilesDir(), "captures/photos");
+            File file = new File(dir, name);
+            String err = null;
+            Uri gallery = null;
             try {
-                // First create a guaranteed fallback copy in app-owned external storage.
-                // This survives MediaStore quirks on cheap TV-box firmware.
-                File rootDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-                if (rootDir == null) rootDir = new File(getFilesDir(), "Pictures");
-                File dir = new File(rootDir, "MedicaMall");
                 if (!dir.exists() && !dir.mkdirs() && !dir.isDirectory()) {
-                    throw new Exception("can't create backup folder");
+                    throw new Exception("can't create internal photo folder");
                 }
-                privateFile = new File(dir, name);
-                try (OutputStream out = new FileOutputStream(privateFile)) {
+                try (OutputStream out = new FileOutputStream(file)) {
                     YuvImage yi = new YuvImage(copy, ImageFormat.NV21, w, h, null);
-                    if (!yi.compressToJpeg(new Rect(0, 0, w, h), 98, out)) {
+                    if (!yi.compressToJpeg(new Rect(0, 0, w, h), 100, out)) {
                         throw new Exception("jpeg encode failed");
                     }
                     out.flush();
                 }
-
-                // Then publish a second copy to the normal Pictures/MedicaMall folder.
-                try {
-                    galleryUri = publishPhotoToGallery(privateFile, name);
-                    if (galleryUri != null) publicPlace = "Pictures/MedicaMall";
-                } catch (Throwable pub) {
-                    error = pub.getMessage() == null ? pub.getClass().getSimpleName() : pub.getMessage();
-                }
+                if (!file.exists() || file.length() == 0) throw new Exception("empty photo file");
+                lastSavedPhotoFile = file;
+                try { gallery = publishPhotoToGallery(file, name); } catch (Throwable ignored) { }
             } catch (Throwable t) {
-                error = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+                err = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
             }
 
-            final File finalPrivate = privateFile;
-            final Uri finalGallery = galleryUri;
-            final String finalPublicPlace = publicPlace;
-            final String finalError = error;
+            final String error = err;
+            final Uri published = gallery;
             ui.post(() -> {
-                if (finalPrivate != null && finalPrivate.exists() && finalPrivate.length() > 0) {
-                    lastSavedPhotoFile = finalPrivate;
-                    lastSavedPhotoUri = finalGallery;
-                    if (finalGallery != null) {
-                        updateTvStatus("تم حفظ الصورة ✓ • " + name + " • " + finalPublicPlace);
-                    } else {
-                        updateTvStatus("تم حفظ نسخة احتياطية ✓ • " + name
-                                + (finalError == null ? "" : " • تعذر المعرض: " + finalError));
-                    }
-                    if (scopeButtonIndicator != null && !videoRecording) {
-                        scopeButtonIndicator.setText("📷 صورة محفوظة ✓");
-                        scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
-                        ui.postDelayed(MainActivity.this::resetScopeIndicator, 1500);
-                    }
+                if (file.exists() && file.length() > 0) {
+                    lastSavedPhotoFile = file;
+                    lastSavedPhotoUri = published;
+                    updateTvStatus("تم حفظ الصورة ✓");
+                    if (lastPhotoButton != null) lastPhotoButton.setText("الصور ✓");
                 } else {
-                    updateTvStatus("فشل حفظ الصورة"
-                            + (finalError == null ? "" : " • " + finalError));
-                    if (scopeButtonIndicator != null) {
-                        scopeButtonIndicator.setText("فشل حفظ الصورة");
-                        scopeButtonIndicator.setBackgroundColor(0xFFC62828);
-                    }
+                    updateTvStatus("فشل حفظ الصورة • " + String.valueOf(error));
                 }
             });
         });
@@ -746,26 +723,41 @@ public class MainActivity extends Activity {
 
     private void openLastPhoto() {
         File file = lastSavedPhotoFile;
-        Uri uri = lastSavedPhotoUri;
-
+        if (file == null || !file.exists()) file = findLatestInternalPhoto();
         if (file == null || !file.exists()) {
-            updateTvStatus("لسه مفيش صورة محفوظة في الجلسة دي");
+            updateTvStatus("مفيش صور محفوظة لسه");
             return;
         }
-
-        try {
-            Uri viewUri = uri;
-            if (viewUri == null || "file".equalsIgnoreCase(viewUri.getScheme())) {
-                viewUri = FileProvider.getUriForFile(
-                        this, getPackageName() + ".files", file);
-            }
-            Intent i = new Intent(Intent.ACTION_VIEW);
-            i.setDataAndType(viewUri, "image/jpeg");
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(i);
-        } catch (Throwable t) {
-            updateTvStatus("الصورة محفوظة هنا: " + file.getAbsolutePath());
+        Bitmap bmp = BitmapFactory.decodeFile(file.getAbsolutePath());
+        if (bmp == null) {
+            updateTvStatus("الصورة موجودة لكن تعذر فتحها");
+            return;
         }
+        showingPhotoReview = true;
+        tvPreview.setVisibility(View.GONE);
+        web.setVisibility(View.GONE);
+        photoReview.setImageBitmap(bmp);
+        photoReview.setVisibility(View.VISIBLE);
+        updateTvStatus("آخر صورة • Back للرجوع");
+    }
+
+    private File findLatestInternalPhoto() {
+        File dir = new File(getFilesDir(), "captures/photos");
+        File[] files = dir.listFiles((d, n) -> n != null && n.toLowerCase(Locale.US).endsWith(".jpg"));
+        if (files == null || files.length == 0) return null;
+        File best = files[0];
+        for (File f : files) if (f.lastModified() > best.lastModified()) best = f;
+        return best;
+    }
+
+    private void closePhotoReview() {
+        if (!showingPhotoReview) return;
+        showingPhotoReview = false;
+        photoReview.setImageDrawable(null);
+        photoReview.setVisibility(View.GONE);
+        tvPreview.setVisibility(showWebScreen ? View.GONE : View.VISIBLE);
+        web.setVisibility(showWebScreen ? View.VISIBLE : View.GONE);
+        updateTvStatus(camOpen ? "LIVE • " + fw + "×" + fh : "في انتظار المنظار");
     }
 
     private void toggleVideoRecording() {
@@ -788,9 +780,7 @@ public class MainActivity extends Activity {
 
         try {
             String name = "Scope_" + fileStamp() + ".mp4";
-            File rootDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES);
-            if (rootDir == null) rootDir = new File(getFilesDir(), "Movies");
-            File dir = new File(rootDir, "MedicaMall");
+            File dir = new File(getFilesDir(), "captures/videos");
             if (!dir.exists() && !dir.mkdirs() && !dir.isDirectory()) {
                 throw new Exception("can't create video folder");
             }
@@ -918,8 +908,9 @@ public class MainActivity extends Activity {
 
     private void resetScopeIndicator() {
         if (scopeButtonIndicator == null || videoRecording) return;
-        scopeButtonIndicator.setText("زرار المنظار: " + scopeButtonCount);
+        scopeButtonIndicator.setText("جاهز");
         scopeButtonIndicator.setBackgroundColor(0xCC116EB5);
+        scopeButtonIndicator.setVisibility(View.GONE);
     }
 
     private void flashCapture() {
@@ -979,73 +970,59 @@ public class MainActivity extends Activity {
         tvControls = new LinearLayout(this);
         tvControls.setOrientation(LinearLayout.HORIZONTAL);
         tvControls.setGravity(Gravity.CENTER);
-        tvControls.setPadding(dp(12), dp(8), dp(12), dp(8));
-        tvControls.setBackgroundColor(0xCC111111);
+        tvControls.setPadding(dp(10), dp(7), dp(10), dp(7));
+        tvControls.setBackgroundColor(0xE6111820);
 
-        retryButton = makeTvButton("إعادة توصيل");
-        screenButton = makeTvButton("واجهة المرضى");
+        screenButton = makeTvButton("المرضى");
         wifiButton = makeTvButton("Wi-Fi");
-        qualityButton = makeTvButton("الجودة");
-        lastPhotoButton = makeTvButton("آخر صورة");
+        lastPhotoButton = makeTvButton("الصور");
         rotateButton = makeTvButton("تدوير");
         exitButton = makeTvButton("خروج");
 
-        retryButton.setOnClickListener(v -> reconnectScope());
         screenButton.setOnClickListener(v -> toggleScreenMode());
         wifiButton.setOnClickListener(v -> toggleWifiStream());
-        qualityButton.setOnClickListener(v -> cycleQuality());
         lastPhotoButton.setOnClickListener(v -> openLastPhoto());
         rotateButton.setOnClickListener(v -> rotatePreview());
         exitButton.setOnClickListener(v -> finish());
 
-        tvControls.addView(retryButton);
         tvControls.addView(screenButton);
         tvControls.addView(wifiButton);
-        tvControls.addView(qualityButton);
         tvControls.addView(lastPhotoButton);
         tvControls.addView(rotateButton);
         tvControls.addView(exitButton);
 
         FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM);
+                FrameLayout.LayoutParams.MATCH_PARENT, dp(72), Gravity.BOTTOM);
         root.addView(tvControls, controlsLp);
 
-        // Explicit D-pad order for cheap TV remotes.
-        retryButton.setId(View.generateViewId());
         screenButton.setId(View.generateViewId());
         wifiButton.setId(View.generateViewId());
-        qualityButton.setId(View.generateViewId());
         lastPhotoButton.setId(View.generateViewId());
         rotateButton.setId(View.generateViewId());
         exitButton.setId(View.generateViewId());
 
-        retryButton.setNextFocusRightId(screenButton.getId());
-        screenButton.setNextFocusLeftId(retryButton.getId());
         screenButton.setNextFocusRightId(wifiButton.getId());
         wifiButton.setNextFocusLeftId(screenButton.getId());
-        wifiButton.setNextFocusRightId(qualityButton.getId());
-        qualityButton.setNextFocusLeftId(wifiButton.getId());
-        qualityButton.setNextFocusRightId(lastPhotoButton.getId());
-        lastPhotoButton.setNextFocusLeftId(qualityButton.getId());
+        wifiButton.setNextFocusRightId(lastPhotoButton.getId());
+        lastPhotoButton.setNextFocusLeftId(wifiButton.getId());
         lastPhotoButton.setNextFocusRightId(rotateButton.getId());
         rotateButton.setNextFocusLeftId(lastPhotoButton.getId());
         rotateButton.setNextFocusRightId(exitButton.getId());
         exitButton.setNextFocusLeftId(rotateButton.getId());
 
-        ui.postDelayed(() -> retryButton.requestFocus(), 350);
+        ui.postDelayed(() -> screenButton.requestFocus(), 350);
     }
 
     private Button makeTvButton(String label) {
         Button b = new Button(this);
         b.setText(label);
-        b.setTextSize(18);
+        b.setTextSize(17);
         b.setAllCaps(false);
         b.setFocusable(true);
         b.setFocusableInTouchMode(true);
-        b.setMinHeight(dp(58));
-        b.setPadding(dp(18), dp(6), dp(18), dp(6));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(64), 1f);
+        b.setMinHeight(dp(52));
+        b.setPadding(dp(12), dp(5), dp(12), dp(5));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(54), 1f);
         lp.setMargins(dp(5), 0, dp(5), 0);
         b.setLayoutParams(lp);
         b.setOnFocusChangeListener((v, hasFocus) -> {
@@ -1061,14 +1038,14 @@ public class MainActivity extends Activity {
 
     private void updateTvStatus(String msg) {
         ui.post(() -> {
-            if (tvStatus != null) tvStatus.setText("TV TEST • " + msg);
+            if (tvStatus != null) tvStatus.setText(msg);
         });
     }
 
     private void queueTvPreview() {
         if (showWebScreen || tvPreview == null) return;
         long now = SystemClock.uptimeMillis();
-        if (now - lastPreviewQueued < 100) return; // target about 10 fps for the TV-box diagnostic build
+        if (now - lastPreviewQueued < 66) return; // about 15 fps; stable on the X96
         if (!previewBusy.compareAndSet(false, true)) return;
         lastPreviewQueued = now;
 
@@ -1090,7 +1067,7 @@ public class MainActivity extends Activity {
             try {
                 YuvImage yi = new YuvImage(copy, ImageFormat.NV21, w, h, null);
                 ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.max(64 * 1024, w * h / 5));
-                if (yi.compressToJpeg(new Rect(0, 0, w, h), 82, bos)) {
+                if (yi.compressToJpeg(new Rect(0, 0, w, h), 100, bos)) {
                     byte[] jpg = bos.toByteArray();
                     bmp = BitmapFactory.decodeByteArray(jpg, 0, jpg.length);
                 }
@@ -1149,7 +1126,7 @@ public class MainActivity extends Activity {
             web.clearFocus();
             web.setFocusable(false);
             web.setFocusableInTouchMode(false);
-            if (retryButton != null) retryButton.requestFocus();
+            if (screenButton != null) screenButton.requestFocus();
             updateTvStatus(camOpen
                     ? "صورة المنظار • " + (currentQualityMode.isEmpty()
                     ? (fw + "×" + fh) : currentQualityMode)
@@ -1875,6 +1852,10 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (showingPhotoReview) {
+            closePhotoReview();
+            return;
+        }
         if (customView != null) {
             chrome.onHideCustomView();
             return;
@@ -1892,7 +1873,7 @@ public class MainActivity extends Activity {
             if (event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
                 if (tvControls != null) {
                     tvControls.setVisibility(tvControls.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
-                    if (tvControls.getVisibility() == View.VISIBLE && retryButton != null) retryButton.requestFocus();
+                    if (tvControls.getVisibility() == View.VISIBLE && screenButton != null) screenButton.requestFocus();
                 }
                 return true;
             }
