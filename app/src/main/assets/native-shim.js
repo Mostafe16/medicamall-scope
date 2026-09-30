@@ -11,6 +11,8 @@
 
   /* ---------------- camera ---------------- */
   var active = null;
+  var tvWebVisible = false;
+  window.__mmTvSetVisible = function (v) { tvWebVisible = !!v; };
   if (md && md.getUserMedia) {
     var _gum = md.getUserMedia.bind(md);
     var _enum = md.enumerateDevices.bind(md);
@@ -46,6 +48,7 @@
       var first = null, gotFirst = new Promise(function (r) { first = r; });
       (async function loop() {
         while (st.running) {
+          if (!tvWebVisible) { await sleep(120); continue; }
           try {
             var r = await fetch('/uvc/frame.jpg?t=' + Date.now(), { cache: 'no-store' });
             if (r.status === 200) {
@@ -115,27 +118,51 @@
 
 
   /* Native Android capture -> patient-session IndexedDB */
-  window.__mmImportNativeMedia = async function (item) {
+  var mmImportRetryMs = 180;
+  window.__mmImportNativeMedia = async function (item, attempt) {
+    attempt = attempt || 0;
     if (!item || !item.url) return;
+
+    // The page opens IndexedDB asynchronously. Native capture can finish before
+    // that startup completes, especially on slow TV-box storage.
+    if (typeof saveMedia !== 'function' || typeof db === 'undefined' || !db) {
+      if (attempt < 35) {
+        return setTimeout(function () {
+          window.__mmImportNativeMedia(item, attempt + 1);
+        }, mmImportRetryMs);
+      }
+      try { N.sessionImportResult(item.type || 'photo', false, 'قاعدة بيانات الجلسة غير جاهزة'); } catch (x) {}
+      return;
+    }
+
     try {
       var r = await fetch(item.url, { cache:'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       var blob = await r.blob();
-      if (typeof saveMedia !== 'function') throw new Error('session media store not ready');
+      if (!blob || !blob.size) throw new Error('empty media');
       await saveMedia(blob, item.type || 'photo', item.ext || 'jpg', item.dur || 0);
       if (typeof renderGallery === 'function') await renderGallery();
+      try { N.sessionImportResult(item.type || 'photo', true, ''); } catch (x) {}
       if (typeof toast === 'function') {
         toast(item.type === 'video' ? '🎥 الفيديو اتضاف للجلسة' : '📷 الصورة اتضافت للجلسة');
       }
     } catch (e) {
+      if (attempt < 12) {
+        return setTimeout(function () {
+          window.__mmImportNativeMedia(item, attempt + 1);
+        }, mmImportRetryMs);
+      }
       console.warn('native media import', e);
-      try { N.toast('الحفظ تم على الجهاز لكن ربط الجلسة فشل'); } catch (x) {}
+      try {
+        N.sessionImportResult(item.type || 'photo', false,
+          (e && e.message) ? String(e.message) : 'unknown');
+      } catch (x) {}
     }
   };
   setTimeout(function () {
     var q = window.__mmPendingNativeMedia || [];
     window.__mmPendingNativeMedia = [];
-    q.forEach(function (x) { window.__mmImportNativeMedia(x); });
+    q.forEach(function (x) { window.__mmImportNativeMedia(x, 0); });
   }, 900);
 
   /* ---------------- Android TV / D-pad adaptation ---------------- */
