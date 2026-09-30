@@ -125,7 +125,7 @@
       ':focus{outline:4px solid #ffc233!important;outline-offset:3px!important;box-shadow:0 0 0 3px rgba(17,110,181,.35)!important}' +
       'button,a[href],select,input,textarea,[role="button"],[onclick]{scroll-margin:110px}' +
       '.mm-tv-stepper{display:inline-flex;align-items:center;gap:8px;margin:7px 8px;vertical-align:middle;direction:ltr}' +
-      '.mm-tv-step-btn{width:54px!important;height:50px!important;min-width:54px!important;min-height:50px!important;padding:0!important;border:0!important;border-radius:12px!important;background:#116eb5!important;color:#fff!important;font-size:28px!important;font-weight:900!important;line-height:1!important}' +
+      '.mm-tv-step-btn{width:48px!important;height:44px!important;min-width:48px!important;min-height:44px!important;padding:0!important;border:0!important;border-radius:10px!important;background:#116eb5!important;color:#fff!important;font-size:25px!important;font-weight:900!important;line-height:1!important}' +
       '.mm-tv-step-val{min-width:76px;padding:10px 12px;border:2px solid #d9e5ef;border-radius:10px;background:#fff;color:#16324a;text-align:center;font:700 17px/1.2 system-ui,sans-serif}' +
       'input[type="range"]{min-width:180px}' +
       '@media (min-width:900px){button,select,input[type="button"],input[type="submit"]{min-height:46px}}';
@@ -167,6 +167,9 @@
       if (input.type !== 'range' && input.type !== 'number') return;
       var id = 'mmstep' + Math.random().toString(36).slice(2, 9);
       input.setAttribute('data-mm-tv-step-id', id);
+      // On TV the physical slider/number input is display-only. Remote control
+      // lands on the explicit minus/plus buttons instead of a touch-oriented slider.
+      input.setAttribute('tabindex', '-1');
 
       var wrap = document.createElement('span');
       wrap.className = 'mm-tv-stepper';
@@ -210,7 +213,7 @@
     };
 
     var visibleFocusables = function () {
-      var q = 'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[role="button"],[onclick]';
+      var q = 'button:not([disabled]),a[href],input:not([disabled]):not([data-mm-tv-step-id]),select:not([disabled]),textarea:not([disabled]),[role="button"],[onclick]';
       return Array.prototype.filter.call(document.querySelectorAll(q), function (el) {
         var r = el.getBoundingClientRect();
         var st = getComputedStyle(el);
