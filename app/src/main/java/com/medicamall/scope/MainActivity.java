@@ -54,6 +54,8 @@ import androidx.webkit.WebViewAssetLoader;
 
 import com.herohan.uvcapp.CameraHelper;
 import com.herohan.uvcapp.ICameraHelper;
+import com.herohan.uvcapp.VideoCapture;
+import com.herohan.uvcapp.VideoCaptureConfig;
 import com.serenegiant.usb.Size;
 import com.serenegiant.usb.UVCCamera;
 
@@ -71,10 +73,13 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -98,6 +103,13 @@ public class MainActivity extends Activity {
     private TextView tvStatus;
     private TextView scopeButtonIndicator;
     private int scopeButtonCount = 0;
+    private Runnable pendingSingleScopePress;
+    private static final long DOUBLE_PRESS_MS = 430;
+    private boolean videoRecording = false;
+    private boolean videoTransition = false;
+    private long videoStartedAt = 0;
+    private Runnable recordingTicker;
+    private View captureFlash;
     private LinearLayout tvControls;
     private Button retryButton;
     private Button screenButton;
@@ -187,6 +199,13 @@ public class MainActivity extends Activity {
                 Gravity.TOP | Gravity.END);
         buttonIndicatorLp.setMargins(dp(14), dp(14), dp(14), dp(14));
         root.addView(scopeButtonIndicator, buttonIndicatorLp);
+
+        captureFlash = new View(this);
+        captureFlash.setBackgroundColor(Color.WHITE);
+        captureFlash.setAlpha(0f);
+        captureFlash.setVisibility(View.GONE);
+        root.addView(captureFlash, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         setupTvControls();
         setContentView(root);
@@ -343,26 +362,42 @@ public class MainActivity extends Activity {
         try { list = cam.getSupportedSizeList(); } catch (Throwable ignored) { }
         if (list == null || list.isEmpty()) return null;
 
-        // TV-box test: start conservatively. Cheap Android boxes can enumerate 1080p
-        // correctly but fail to deliver stable converted frames at that size.
-        Size mjpeg640 = null, mjpeg720 = null, smallestMjpeg = null, fallback = null;
+        // Quality mode for the X96: use the largest MJPEG size that stays within
+        // roughly one megapixel. The first diagnostic build deliberately picked
+        // the smallest stream (400x400); the box proved stable at 30 FPS, so we
+        // can now step up quality without jumping straight to a multi-megapixel stream.
+        Size bestMjpeg = null;
+        Size bestAny = null;
+        final int MAX_PIXELS = 1280 * 960;
         for (Size z : list) {
-            if (isMjpeg(z)) {
-                if (z.width == 640 && z.height == 480) mjpeg640 = z;
-                if (z.width == 1280 && z.height == 720) mjpeg720 = z;
-                if (smallestMjpeg == null || z.width * z.height < smallestMjpeg.width * smallestMjpeg.height) {
-                    smallestMjpeg = z;
+            int pixels = z.width * z.height;
+            if (pixels <= MAX_PIXELS) {
+                if (isMjpeg(z) && (bestMjpeg == null
+                        || pixels > bestMjpeg.width * bestMjpeg.height)) {
+                    bestMjpeg = z;
+                }
+                if (bestAny == null || pixels > bestAny.width * bestAny.height) {
+                    bestAny = z;
                 }
             }
-            if (z.width * z.height <= 1280 * 720
-                    && (fallback == null || z.width * z.height < fallback.width * fallback.height)) {
-                fallback = z;
+        }
+        if (bestMjpeg != null) return bestMjpeg;
+        if (bestAny != null) return bestAny;
+
+        // If every advertised mode is larger, fall back to the smallest MJPEG
+        // rather than failing the camera open.
+        Size smallestMjpeg = null, smallestAny = null;
+        for (Size z : list) {
+            int pixels = z.width * z.height;
+            if (isMjpeg(z) && (smallestMjpeg == null
+                    || pixels < smallestMjpeg.width * smallestMjpeg.height)) {
+                smallestMjpeg = z;
+            }
+            if (smallestAny == null || pixels < smallestAny.width * smallestAny.height) {
+                smallestAny = z;
             }
         }
-        if (mjpeg640 != null) return mjpeg640;
-        if (mjpeg720 != null) return mjpeg720;
-        if (smallestMjpeg != null) return smallestMjpeg;
-        return fallback;
+        return smallestMjpeg != null ? smallestMjpeg : smallestAny;
     }
 
     private void initCam() {
@@ -401,6 +436,13 @@ public class MainActivity extends Activity {
                 try {
                     Size p = cam.getPreviewSize();
                     if (p != null) synchronized (frameLock) { fw = p.width; fh = p.height; }
+                } catch (Throwable ignored) { }
+                try {
+                    VideoCaptureConfig vc = cam.getVideoCaptureConfig();
+                    vc.setAudioCaptureEnable(false)
+                            .setVideoFrameRate(30)
+                            .setBitRate(Math.max(4 * 1024 * 1024, fw * fh * 10));
+                    cam.setVideoCaptureConfig(vc);
                 } catch (Throwable ignored) { }
                 cam.setFrameCallback(MainActivity.this::onFrame, UVCCamera.PIXEL_FORMAT_NV21);
                 try {
@@ -481,38 +523,251 @@ public class MainActivity extends Activity {
             lastFps = fpsFrames * 1000f / Math.max(1, now - fpsWindowStart);
             fpsFrames = 0;
             fpsWindowStart = now;
-            updateTvStatus("LIVE • " + fw + "×" + fh + " • " + String.format(java.util.Locale.US, "%.1f", lastFps) + " FPS");
+            if (!videoRecording && !videoTransition) {
+                updateTvStatus("LIVE • " + fw + "×" + fh + " • "
+                        + String.format(Locale.US, "%.1f", lastFps) + " FPS");
+            }
         }
         queueTvPreview();
     }
 
     private void onScopeButton() {
         long now = SystemClock.uptimeMillis();
-        if (now - lastButton < 150) return; // debounce
+        if (now - lastButton < 150) return; // hardware debounce
         lastButton = now;
+        ui.post(this::handleScopePressOnUi);
+    }
+
+    private void handleScopePressOnUi() {
         scopeButtonCount++;
         final int count = scopeButtonCount;
-        ui.post(() -> {
-            if (scopeButtonIndicator != null) {
-                scopeButtonIndicator.setText("زرار المنظار: " + count + " ✓");
-                scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
-                scopeButtonIndicator.animate()
-                        .scaleX(1.18f).scaleY(1.18f)
-                        .setDuration(80)
-                        .withEndAction(() -> scopeButtonIndicator.animate()
-                                .scaleX(1f).scaleY(1f).setDuration(120).start())
-                        .start();
-                ui.postDelayed(() -> {
-                    if (scopeButtonIndicator != null) {
-                        scopeButtonIndicator.setBackgroundColor(0xCC116EB5);
+
+        if (scopeButtonIndicator != null && !videoRecording) {
+            scopeButtonIndicator.setText("زرار المنظار: " + count + " ✓");
+            scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
+        }
+
+        if (pendingSingleScopePress != null) {
+            // Second press inside the window: this is a double press.
+            ui.removeCallbacks(pendingSingleScopePress);
+            pendingSingleScopePress = null;
+            toggleVideoRecording();
+            return;
+        }
+
+        pendingSingleScopePress = () -> {
+            pendingSingleScopePress = null;
+            captureStillPhoto();
+        };
+        ui.postDelayed(pendingSingleScopePress, DOUBLE_PRESS_MS);
+    }
+
+    private void captureStillPhoto() {
+        if (!camOpen || frame == null) {
+            updateTvStatus("الصورة لم تُحفظ • المنظار غير جاهز");
+            return;
+        }
+        if (videoTransition) {
+            updateTvStatus("انتظر لحظة حتى يكتمل تغيير حالة التسجيل");
+            return;
+        }
+
+        byte[] copy;
+        int w, h;
+        synchronized (frameLock) {
+            if (frame == null) return;
+            copy = new byte[frame.length];
+            System.arraycopy(frame, 0, copy, 0, frame.length);
+            w = fw;
+            h = fh;
+        }
+
+        flashCapture();
+        previewExec.execute(() -> {
+            Uri saved = null;
+            try {
+                String name = "Scope_" + fileStamp() + ".jpg";
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                cv.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg");
+                if (Build.VERSION.SDK_INT >= 29) {
+                    cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                            Environment.DIRECTORY_PICTURES + "/MedicaMall");
+                }
+                Uri uri = getContentResolver().insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+                if (uri == null) throw new Exception("MediaStore insert failed");
+                try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+                    if (out == null) throw new Exception("output stream failed");
+                    YuvImage yi = new YuvImage(copy, ImageFormat.NV21, w, h, null);
+                    if (!yi.compressToJpeg(new Rect(0, 0, w, h), 97, out)) {
+                        throw new Exception("jpeg encode failed");
                     }
-                }, 700);
+                }
+                saved = uri;
+            } catch (Throwable t) {
+                final String msg = t.getMessage() == null ? "unknown" : t.getMessage();
+                ui.post(() -> updateTvStatus("خطأ في حفظ الصورة • " + msg));
             }
-            if (tvStatus != null) {
-                tvStatus.setText("TV TEST • تم ضغط زرار المنظار • Press #" + count);
+
+            final Uri result = saved;
+            if (result != null) {
+                ui.post(() -> {
+                    updateTvStatus("تم حفظ الصورة ✓ • " + fw + "×" + fh);
+                    if (scopeButtonIndicator != null && !videoRecording) {
+                        scopeButtonIndicator.setText("📷 صورة محفوظة ✓");
+                        scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
+                        ui.postDelayed(() -> resetScopeIndicator(), 1200);
+                    }
+                });
             }
         });
-        js("button");
+    }
+
+    private void toggleVideoRecording() {
+        if (videoTransition) return;
+        if (cam == null || !camOpen) {
+            updateTvStatus("لا يمكن التسجيل • المنظار غير متصل");
+            return;
+        }
+
+        if (videoRecording || cam.isRecording()) {
+            stopVideoRecording();
+        } else {
+            startVideoRecording();
+        }
+    }
+
+    private void startVideoRecording() {
+        videoTransition = true;
+        updateTvStatus("جاري بدء تسجيل الفيديو...");
+
+        try {
+            String name = "Scope_" + fileStamp() + ".mp4";
+            VideoCapture.OutputFileOptions options;
+
+            if (Build.VERSION.SDK_INT >= 29) {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                cv.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
+                cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                        Environment.DIRECTORY_MOVIES + "/MedicaMall");
+                options = new VideoCapture.OutputFileOptions.Builder(
+                        getContentResolver(),
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        cv).build();
+            } else {
+                File dir = new File(
+                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                        "MedicaMall");
+                dir.mkdirs();
+                options = new VideoCapture.OutputFileOptions.Builder(
+                        new File(dir, name)).build();
+            }
+
+            cam.startRecording(options, new VideoCapture.OnVideoCaptureCallback() {
+                @Override
+                public void onStart() {
+                    ui.post(() -> {
+                        videoTransition = false;
+                        videoRecording = true;
+                        videoStartedAt = SystemClock.uptimeMillis();
+                        startRecordingTicker();
+                        updateTvStatus("● REC • " + fw + "×" + fh + " • اضغط مرتين للإيقاف");
+                    });
+                }
+
+                @Override
+                public void onVideoSaved(VideoCapture.OutputFileResults outputFileResults) {
+                    ui.post(() -> {
+                        videoTransition = false;
+                        videoRecording = false;
+                        stopRecordingTicker();
+                        updateTvStatus("تم حفظ الفيديو ✓ • Movies/MedicaMall");
+                        if (scopeButtonIndicator != null) {
+                            scopeButtonIndicator.setText("🎥 فيديو محفوظ ✓");
+                            scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
+                            ui.postDelayed(() -> resetScopeIndicator(), 1600);
+                        }
+                    });
+                }
+
+                @Override
+                public void onError(int videoCaptureError, String message, Throwable cause) {
+                    ui.post(() -> {
+                        videoTransition = false;
+                        videoRecording = false;
+                        stopRecordingTicker();
+                        updateTvStatus("خطأ في تسجيل الفيديو • " + message);
+                        if (scopeButtonIndicator != null) {
+                            scopeButtonIndicator.setText("خطأ تسجيل");
+                            scopeButtonIndicator.setBackgroundColor(0xFFC62828);
+                        }
+                    });
+                }
+            });
+        } catch (Throwable t) {
+            videoTransition = false;
+            videoRecording = false;
+            updateTvStatus("تعذر بدء التسجيل • " + t.getMessage());
+        }
+    }
+
+    private void stopVideoRecording() {
+        if (cam == null) return;
+        videoTransition = true;
+        updateTvStatus("جاري إيقاف وحفظ الفيديو...");
+        try {
+            cam.stopRecording();
+        } catch (Throwable t) {
+            videoTransition = false;
+            updateTvStatus("تعذر إيقاف التسجيل • " + t.getMessage());
+        }
+    }
+
+    private void startRecordingTicker() {
+        stopRecordingTicker();
+        recordingTicker = new Runnable() {
+            @Override
+            public void run() {
+                if (!videoRecording) return;
+                long sec = Math.max(0, (SystemClock.uptimeMillis() - videoStartedAt) / 1000);
+                long min = sec / 60;
+                sec %= 60;
+                if (scopeButtonIndicator != null) {
+                    scopeButtonIndicator.setText(String.format(Locale.US,
+                            "● REC %02d:%02d", min, sec));
+                    scopeButtonIndicator.setBackgroundColor(0xFFD32F2F);
+                }
+                ui.postDelayed(this, 1000);
+            }
+        };
+        recordingTicker.run();
+    }
+
+    private void stopRecordingTicker() {
+        if (recordingTicker != null) {
+            ui.removeCallbacks(recordingTicker);
+            recordingTicker = null;
+        }
+    }
+
+    private void resetScopeIndicator() {
+        if (scopeButtonIndicator == null || videoRecording) return;
+        scopeButtonIndicator.setText("زرار المنظار: " + scopeButtonCount);
+        scopeButtonIndicator.setBackgroundColor(0xCC116EB5);
+    }
+
+    private void flashCapture() {
+        if (captureFlash == null) return;
+        captureFlash.setVisibility(View.VISIBLE);
+        captureFlash.setAlpha(0.65f);
+        captureFlash.animate().alpha(0f).setDuration(130)
+                .withEndAction(() -> captureFlash.setVisibility(View.GONE)).start();
+    }
+
+    private String fileStamp() {
+        return new SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(new Date());
     }
 
     private WebResourceResponse frameResponse() {
@@ -704,6 +959,16 @@ public class MainActivity extends Activity {
 
     private void reconnectScope() {
         updateTvStatus("إعادة تهيئة USB والكاميرا...");
+        if (pendingSingleScopePress != null) {
+            ui.removeCallbacks(pendingSingleScopePress);
+            pendingSingleScopePress = null;
+        }
+        if (cam != null && (videoRecording || cam.isRecording())) {
+            try { cam.stopRecording(); } catch (Throwable ignored) { }
+        }
+        videoRecording = false;
+        videoTransition = false;
+        stopRecordingTicker();
         camOpen = false;
         synchronized (frameLock) {
             frame = null;
@@ -1215,6 +1480,11 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         stopWifiStream();
         camOpen = false;
+        if (pendingSingleScopePress != null) ui.removeCallbacks(pendingSingleScopePress);
+        stopRecordingTicker();
+        if (cam != null && (videoRecording || cam.isRecording())) {
+            try { cam.stopRecording(); } catch (Throwable ignored) { }
+        }
         previewExec.shutdownNow();
         clearTvPreview();
         if (cam != null) {
