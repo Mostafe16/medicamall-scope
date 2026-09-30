@@ -78,6 +78,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -114,8 +115,14 @@ public class MainActivity extends Activity {
     private Button retryButton;
     private Button screenButton;
     private Button wifiButton;
+    private Button qualityButton;
     private Button rotateButton;
     private Button exitButton;
+    private final List<Size> qualitySizes = new ArrayList<>();
+    private int qualityIndex = -1;
+    private Size lastGoodQuality = null;
+    private long lastFrameAt = 0;
+    private int qualityGeneration = 0;
     private boolean showWebScreen = false;
     private int previewRotation = 0;
     private Bitmap lastTvBitmap;
@@ -437,6 +444,22 @@ public class MainActivity extends Activity {
                     Size p = cam.getPreviewSize();
                     if (p != null) synchronized (frameLock) { fw = p.width; fh = p.height; }
                 } catch (Throwable ignored) { }
+                refreshQualitySizes();
+                try {
+                    Size current = cam.getPreviewSize();
+                    if (current != null) {
+                        qualityIndex = findQualityIndex(current);
+                        if (qualityButton != null) {
+                            qualityButton.setText("الجودة " + current.width + "×" + current.height);
+                        }
+                    }
+                } catch (Throwable ignored) { }
+
+                // The device is now fully opened; this is the reliable point to ask it
+                // for every UVC mode. If a higher mode exists, try one step above the
+                // default 400x400 automatically, with watchdog fallback.
+                ui.postDelayed(this::tryOneHigherQualityAutomatically, 700);
+
                 try {
                     VideoCaptureConfig vc = cam.getVideoCaptureConfig();
                     vc.setAudioCaptureEnable(false)
@@ -517,6 +540,7 @@ public class MainActivity extends Activity {
         }
 
         long now = SystemClock.uptimeMillis();
+        lastFrameAt = now;
         if (fpsWindowStart == 0) fpsWindowStart = now;
         fpsFrames++;
         if (now - fpsWindowStart >= 1000) {
@@ -821,18 +845,21 @@ public class MainActivity extends Activity {
         retryButton = makeTvButton("إعادة توصيل");
         screenButton = makeTvButton("واجهة المرضى");
         wifiButton = makeTvButton("Wi-Fi");
+        qualityButton = makeTvButton("الجودة");
         rotateButton = makeTvButton("تدوير");
         exitButton = makeTvButton("خروج");
 
         retryButton.setOnClickListener(v -> reconnectScope());
         screenButton.setOnClickListener(v -> toggleScreenMode());
         wifiButton.setOnClickListener(v -> toggleWifiStream());
+        qualityButton.setOnClickListener(v -> cycleQuality());
         rotateButton.setOnClickListener(v -> rotatePreview());
         exitButton.setOnClickListener(v -> finish());
 
         tvControls.addView(retryButton);
         tvControls.addView(screenButton);
         tvControls.addView(wifiButton);
+        tvControls.addView(qualityButton);
         tvControls.addView(rotateButton);
         tvControls.addView(exitButton);
 
@@ -845,6 +872,7 @@ public class MainActivity extends Activity {
         retryButton.setId(View.generateViewId());
         screenButton.setId(View.generateViewId());
         wifiButton.setId(View.generateViewId());
+        qualityButton.setId(View.generateViewId());
         rotateButton.setId(View.generateViewId());
         exitButton.setId(View.generateViewId());
 
@@ -852,8 +880,10 @@ public class MainActivity extends Activity {
         screenButton.setNextFocusLeftId(retryButton.getId());
         screenButton.setNextFocusRightId(wifiButton.getId());
         wifiButton.setNextFocusLeftId(screenButton.getId());
-        wifiButton.setNextFocusRightId(rotateButton.getId());
-        rotateButton.setNextFocusLeftId(wifiButton.getId());
+        wifiButton.setNextFocusRightId(qualityButton.getId());
+        qualityButton.setNextFocusLeftId(wifiButton.getId());
+        qualityButton.setNextFocusRightId(rotateButton.getId());
+        rotateButton.setNextFocusLeftId(qualityButton.getId());
         rotateButton.setNextFocusRightId(exitButton.getId());
         exitButton.setNextFocusLeftId(rotateButton.getId());
 
@@ -951,6 +981,196 @@ public class MainActivity extends Activity {
                 (camOpen ? "صورة المنظار • " + fw + "×" + fh : "صورة المنظار • في انتظار الاتصال"));
     }
 
+    private void refreshQualitySizes() {
+        qualitySizes.clear();
+        try {
+            List<Size> raw = cam == null ? null : cam.getSupportedSizeList();
+            if (raw == null) return;
+
+            // De-duplicate width/height/type/fps combinations while preserving useful modes.
+            Map<String, Size> unique = new LinkedHashMap<>();
+            for (Size z : raw) {
+                if (z == null || z.width <= 0 || z.height <= 0) continue;
+                String key = z.width + "x" + z.height + ":" + z.type + ":" + z.fps;
+                unique.put(key, z);
+            }
+            qualitySizes.addAll(unique.values());
+
+            // Lowest -> highest. Prefer MJPEG when two modes have same pixel count.
+            Collections.sort(qualitySizes, (a, b) -> {
+                int pa = a.width * a.height;
+                int pb = b.width * b.height;
+                if (pa != pb) return Integer.compare(pa, pb);
+                if (isMjpeg(a) != isMjpeg(b)) return isMjpeg(a) ? 1 : -1;
+                return Integer.compare(a.fps, b.fps);
+            });
+        } catch (Throwable ignored) { }
+
+        ui.post(() -> {
+            if (qualityButton != null) {
+                qualityButton.setText("الجودة (" + qualitySizes.size() + ")");
+            }
+        });
+    }
+
+    private int findQualityIndex(Size current) {
+        if (current == null) return -1;
+        for (int i = 0; i < qualitySizes.size(); i++) {
+            Size z = qualitySizes.get(i);
+            if (z.width == current.width && z.height == current.height
+                    && z.type == current.type && z.fps == current.fps) return i;
+        }
+        // Fallback: match dimensions only.
+        for (int i = 0; i < qualitySizes.size(); i++) {
+            Size z = qualitySizes.get(i);
+            if (z.width == current.width && z.height == current.height) return i;
+        }
+        return -1;
+    }
+
+    private void tryOneHigherQualityAutomatically() {
+        if (!camOpen || qualitySizes.isEmpty()) return;
+        Size current = null;
+        try { current = cam.getPreviewSize(); } catch (Throwable ignored) { }
+        int currentPixels = current == null ? 0 : current.width * current.height;
+
+        // Prefer a clearly better MJPEG mode, but only move one step during auto-upgrade.
+        Size candidate = null;
+        for (Size z : qualitySizes) {
+            int p = z.width * z.height;
+            if (p > currentPixels && isMjpeg(z)) {
+                candidate = z;
+                break;
+            }
+        }
+        if (candidate == null) {
+            for (Size z : qualitySizes) {
+                if (z.width * z.height > currentPixels) {
+                    candidate = z;
+                    break;
+                }
+            }
+        }
+        if (candidate != null) switchQuality(candidate, true);
+        else showQualityModes();
+    }
+
+    private void cycleQuality() {
+        if (!camOpen || cam == null) {
+            updateTvStatus("الجودة: المنظار غير متصل");
+            return;
+        }
+        refreshQualitySizes();
+        if (qualitySizes.isEmpty()) {
+            updateTvStatus("المنظار لم يعلن عن دقات إضافية");
+            return;
+        }
+
+        Size current = null;
+        try { current = cam.getPreviewSize(); } catch (Throwable ignored) { }
+        int idx = findQualityIndex(current);
+        if (idx < 0) idx = qualityIndex;
+        int next = (idx + 1) % qualitySizes.size();
+        switchQuality(qualitySizes.get(next), false);
+    }
+
+    private void switchQuality(Size target, boolean automatic) {
+        if (target == null || cam == null || !camOpen) return;
+        if (videoRecording || videoTransition || cam.isRecording()) {
+            updateTvStatus("أوقف تسجيل الفيديو قبل تغيير الجودة");
+            return;
+        }
+
+        Size before = null;
+        try { before = cam.getPreviewSize(); } catch (Throwable ignored) { }
+        final Size previous = before;
+        final int generation = ++qualityGeneration;
+
+        updateTvStatus("تجربة جودة " + target.width + "×" + target.height
+                + (isMjpeg(target) ? " • MJPEG" : "")
+                + " • " + target.fps + " FPS");
+
+        try {
+            cam.stopPreview();
+            cam.setPreviewSize(target);
+            synchronized (frameLock) {
+                frame = null;
+                work = null;
+                seq = 0;
+                served = 0;
+                fw = target.width;
+                fh = target.height;
+            }
+            lastFrameAt = 0;
+            cam.startPreview();
+
+            qualityIndex = findQualityIndex(target);
+            if (qualityButton != null) {
+                qualityButton.setText("الجودة " + target.width + "×" + target.height);
+            }
+
+            // If no frame arrives at the new size, return to the last working size.
+            ui.postDelayed(() -> {
+                if (generation != qualityGeneration || !camOpen) return;
+                long age = lastFrameAt == 0 ? Long.MAX_VALUE
+                        : SystemClock.uptimeMillis() - lastFrameAt;
+                if (age > 1600 && previous != null) {
+                    updateTvStatus("الدقة " + target.width + "×" + target.height
+                            + " لم تعمل • رجوع " + previous.width + "×" + previous.height);
+                    try {
+                        cam.stopPreview();
+                        cam.setPreviewSize(previous);
+                        synchronized (frameLock) {
+                            frame = null;
+                            work = null;
+                            seq = 0;
+                            served = 0;
+                            fw = previous.width;
+                            fh = previous.height;
+                        }
+                        cam.startPreview();
+                        lastGoodQuality = previous;
+                        qualityIndex = findQualityIndex(previous);
+                        if (qualityButton != null) {
+                            qualityButton.setText("الجودة " + previous.width + "×" + previous.height);
+                        }
+                    } catch (Throwable t) {
+                        updateTvStatus("فشل الرجوع للدقة السابقة • إعادة توصيل");
+                    }
+                } else {
+                    lastGoodQuality = target;
+                    updateTvStatus("الجودة تعمل ✓ • " + target.width + "×" + target.height);
+                }
+            }, automatic ? 2200 : 1800);
+        } catch (Throwable t) {
+            updateTvStatus("الدقة دي غير مستقرة • " + t.getMessage());
+            if (previous != null) {
+                try {
+                    cam.setPreviewSize(previous);
+                    fw = previous.width;
+                    fh = previous.height;
+                    cam.startPreview();
+                } catch (Throwable ignored) { }
+            }
+        }
+    }
+
+    private void showQualityModes() {
+        if (qualitySizes.isEmpty()) return;
+        StringBuilder sb = new StringBuilder("الدقات: ");
+        int shown = 0;
+        for (Size z : qualitySizes) {
+            if (shown++ >= 6) {
+                sb.append("...");
+                break;
+            }
+            if (shown > 1) sb.append(" | ");
+            sb.append(z.width).append("×").append(z.height);
+            if (isMjpeg(z)) sb.append(" M");
+        }
+        updateTvStatus(sb.toString());
+    }
+
     private void rotatePreview() {
         previewRotation = (previewRotation + 90) % 360;
         tvPreview.setRotation(previewRotation);
@@ -985,6 +1205,10 @@ public class MainActivity extends Activity {
         }
         resized = false;
         bestSize = null;
+        qualitySizes.clear();
+        qualityIndex = -1;
+        lastGoodQuality = null;
+        qualityGeneration++;
         initCam();
         ui.postDelayed(this::openFirstUvc, 500);
     }
