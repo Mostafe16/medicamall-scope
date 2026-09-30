@@ -59,6 +59,8 @@ import com.herohan.uvcapp.VideoCaptureConfig;
 import com.serenegiant.usb.Size;
 import com.serenegiant.usb.UVCCamera;
 
+import org.json.JSONObject;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -1437,9 +1439,9 @@ public class MainActivity extends Activity {
 
         String url = ORIGIN + "/native-media/" + token;
         String script = "(function(){"
-                + "var x={url:" + jsQuote(url)
-                + ",type:" + jsQuote(type)
-                + ",ext:" + jsQuote(ext)
+                + "var x={url:" + JSONObject.quote(url)
+                + ",type:" + JSONObject.quote(type)
+                + ",ext:" + JSONObject.quote(ext)
                 + ",dur:" + Math.max(0, durationSeconds) + "};"
                 + "if(window.__mmImportNativeMedia){window.__mmImportNativeMedia(x);}"
                 + "else{(window.__mmPendingNativeMedia=window.__mmPendingNativeMedia||[]).push(x);}"
@@ -1472,15 +1474,6 @@ public class MainActivity extends Activity {
                 "text/plain", "utf-8", 404, "Not Found",
                 Collections.singletonMap("Cache-Control", "no-store"),
                 new ByteArrayInputStream("not found".getBytes(StandardCharsets.UTF_8)));
-    }
-
-    private static String jsQuote(String value) {
-        if (value == null) return "null";
-        String x = value.replace("\\", "\\\\")
-                .replace(""", "\\"")
-                .replace("\r", "\\r")
-                .replace("\n", "\\n");
-        return """ + x + """;
     }
 
     // ================= Wi-Fi live view =================
