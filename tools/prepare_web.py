@@ -14,6 +14,39 @@ HEADERS = {
 }
 
 
+
+SESSION_BRIDGE = r"""
+/* ---------- Android native media bridge (in page scope) ---------- */
+window.__mmPageImportNativeMedia = async function(item){
+  try{
+    if(!item || !item.url) throw new Error('missing media url');
+    const r = await fetch(item.url, {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const blob = await r.blob();
+    if(!blob || !blob.size) throw new Error('empty media');
+    await saveMedia(blob, item.type || 'photo', item.ext || 'jpg', item.dur || 0);
+    await renderGallery();
+    try{ window.BesNative && BesNative.sessionImportResult(item.type || 'photo', true, ''); }catch(e){}
+  }catch(e){
+    try{ window.BesNative && BesNative.sessionImportResult(item && item.type || 'photo', false, String(e && e.message || e || 'unknown')); }catch(x){}
+  }
+};
+(function(){
+  const q = window.__mmPendingNativeMedia || [];
+  window.__mmPendingNativeMedia = [];
+  q.forEach(x => window.__mmPageImportNativeMedia(x));
+})();
+"""
+
+def inject_session_bridge(html):
+    if '__mmPageImportNativeMedia' in html:
+        return html
+    marker = '/* ---------- init ---------- */'
+    if marker in html:
+        return html.replace(marker, SESSION_BRIDGE + '\n' + marker, 1)
+    return html
+
+
 def fetch_app():
     """Exam-screen HTML from the live page (a few retries; Cloudflare sometimes answers with a challenge page)."""
     for attempt in range(6):
@@ -52,6 +85,7 @@ if app is None:
         sys.exit('ERROR: could not get the exam screen from the site or the previous APK')
     print('::warning::Site not reachable - reused exam screen from the previous APK')
 
+app = inject_session_bridge(app)
 if '<head>' in app:
     app = app.replace('<head>', '<head><script src="native-shim.js"></script>', 1)
 else:
