@@ -123,6 +123,7 @@ public class MainActivity extends Activity {
     private Size lastGoodQuality = null;
     private long lastFrameAt = 0;
     private int qualityGeneration = 0;
+    private String currentQualityMode = "";
     private boolean showWebScreen = false;
     private int previewRotation = 0;
     private Bitmap lastTvBitmap;
@@ -449,8 +450,9 @@ public class MainActivity extends Activity {
                     Size current = cam.getPreviewSize();
                     if (current != null) {
                         qualityIndex = findQualityIndex(current);
+                        currentQualityMode = qualityLabel(current);
                         if (qualityButton != null) {
-                            qualityButton.setText("الجودة " + current.width + "×" + current.height);
+                            qualityButton.setText("الجودة " + shortQualityLabel(current));
                         }
                     }
                 } catch (Throwable ignored) { }
@@ -548,7 +550,9 @@ public class MainActivity extends Activity {
             fpsFrames = 0;
             fpsWindowStart = now;
             if (!videoRecording && !videoTransition) {
-                updateTvStatus("LIVE • " + fw + "×" + fh + " • "
+                String mode = currentQualityMode == null || currentQualityMode.isEmpty()
+                        ? (fw + "×" + fh) : currentQualityMode;
+                updateTvStatus("LIVE • " + mode + " • "
                         + String.format(Locale.US, "%.1f", lastFps) + " FPS");
             }
         }
@@ -979,6 +983,12 @@ public class MainActivity extends Activity {
         screenButton.setText(showWebScreen ? "صورة المنظار" : "واجهة المرضى");
 
         if (showWebScreen) {
+            // Patient screen gets the entire TV canvas. The native toolbar/status
+            // are useful on the scope preview but only cover clinical UI here.
+            if (tvControls != null) tvControls.setVisibility(View.GONE);
+            if (tvStatus != null) tvStatus.setVisibility(View.GONE);
+            if (scopeButtonIndicator != null) scopeButtonIndicator.setVisibility(View.GONE);
+
             web.setFocusable(true);
             web.setFocusableInTouchMode(true);
             web.requestFocus();
@@ -986,19 +996,23 @@ public class MainActivity extends Activity {
                 if (web != null) {
                     web.evaluateJavascript(
                             "window.__mmTvFocusFirst&&window.__mmTvFocusFirst()", null);
+                    toast("الأسهم للحركة • OK للاختيار • Back يرجع لصورة المنظار");
                 }
             }, 180);
         } else {
+            if (tvControls != null) tvControls.setVisibility(View.VISIBLE);
+            if (tvStatus != null) tvStatus.setVisibility(View.VISIBLE);
+            if (scopeButtonIndicator != null) scopeButtonIndicator.setVisibility(View.VISIBLE);
+
             web.clearFocus();
             web.setFocusable(false);
             web.setFocusableInTouchMode(false);
             if (retryButton != null) retryButton.requestFocus();
+            updateTvStatus(camOpen
+                    ? "صورة المنظار • " + (currentQualityMode.isEmpty()
+                    ? (fw + "×" + fh) : currentQualityMode)
+                    : "صورة المنظار • في انتظار الاتصال");
         }
-
-        updateTvStatus(showWebScreen
-                ? "واجهة المرضى • الأسهم للحركة و OK للاختيار • Back يرجع للمنظار"
-                : (camOpen ? "صورة المنظار • " + fw + "×" + fh
-                : "صورة المنظار • في انتظار الاتصال"));
     }
 
     private void refreshQualitySizes() {
@@ -1028,7 +1042,10 @@ public class MainActivity extends Activity {
 
         ui.post(() -> {
             if (qualityButton != null) {
-                qualityButton.setText("الجودة (" + qualitySizes.size() + ")");
+                Size current = null;
+                try { current = cam == null ? null : cam.getPreviewSize(); } catch (Throwable ignored) { }
+                if (current != null) qualityButton.setText("الجودة " + shortQualityLabel(current));
+                else qualityButton.setText("الجودة (" + qualitySizes.size() + ")");
             }
         });
     }
@@ -1071,6 +1088,20 @@ public class MainActivity extends Activity {
                 }
             }
         }
+
+        // No higher resolution advertised: if the current mode is MJPEG and the
+        // scope exposes an uncompressed mode at the same size, test it. Resolution
+        // stays 400x400 but compression artifacts may be lower.
+        if (candidate == null && current != null && isMjpeg(current)) {
+            for (Size z : qualitySizes) {
+                if (z.width == current.width && z.height == current.height
+                        && !isMjpeg(z)) {
+                    candidate = z;
+                    break;
+                }
+            }
+        }
+
         if (candidate != null) switchQuality(candidate, true);
         else showQualityModes();
     }
@@ -1106,9 +1137,7 @@ public class MainActivity extends Activity {
         final Size previous = before;
         final int generation = ++qualityGeneration;
 
-        updateTvStatus("تجربة جودة " + target.width + "×" + target.height
-                + (isMjpeg(target) ? " • MJPEG" : "")
-                + " • " + target.fps + " FPS");
+        updateTvStatus("تجربة جودة " + qualityLabel(target));
 
         try {
             cam.stopPreview();
@@ -1125,8 +1154,9 @@ public class MainActivity extends Activity {
             cam.startPreview();
 
             qualityIndex = findQualityIndex(target);
+            currentQualityMode = qualityLabel(target);
             if (qualityButton != null) {
-                qualityButton.setText("الجودة " + target.width + "×" + target.height);
+                qualityButton.setText("الجودة " + shortQualityLabel(target));
             }
 
             // If no frame arrives at the new size, return to the last working size.
@@ -1151,15 +1181,17 @@ public class MainActivity extends Activity {
                         cam.startPreview();
                         lastGoodQuality = previous;
                         qualityIndex = findQualityIndex(previous);
+                        currentQualityMode = qualityLabel(previous);
                         if (qualityButton != null) {
-                            qualityButton.setText("الجودة " + previous.width + "×" + previous.height);
+                            qualityButton.setText("الجودة " + shortQualityLabel(previous));
                         }
                     } catch (Throwable t) {
                         updateTvStatus("فشل الرجوع للدقة السابقة • إعادة توصيل");
                     }
                 } else {
                     lastGoodQuality = target;
-                    updateTvStatus("الجودة تعمل ✓ • " + target.width + "×" + target.height);
+                    currentQualityMode = qualityLabel(target);
+                    updateTvStatus("الجودة تعمل ✓ • " + qualityLabel(target));
                 }
             }, automatic ? 2200 : 1800);
         } catch (Throwable t) {
@@ -1175,6 +1207,20 @@ public class MainActivity extends Activity {
         }
     }
 
+    private String qualityLabel(Size z) {
+        if (z == null) return "";
+        String fmt = isMjpeg(z) ? "MJPEG" :
+                (z.type == UVCCamera.UVC_VS_FRAME_UNCOMPRESSED
+                        || z.type == UVCCamera.UVC_VS_FORMAT_UNCOMPRESSED
+                        || z.type == UVCCamera.FRAME_FORMAT_YUYV ? "Uncompressed" : ("UVC-" + z.type));
+        return z.width + "×" + z.height + " • " + fmt + " • " + z.fps + " FPS";
+    }
+
+    private String shortQualityLabel(Size z) {
+        if (z == null) return "";
+        return z.width + "×" + z.height + (isMjpeg(z) ? " M" : " U");
+    }
+
     private void showQualityModes() {
         if (qualitySizes.isEmpty()) return;
         StringBuilder sb = new StringBuilder("الدقات: ");
@@ -1185,8 +1231,9 @@ public class MainActivity extends Activity {
                 break;
             }
             if (shown > 1) sb.append(" | ");
-            sb.append(z.width).append("×").append(z.height);
-            if (isMjpeg(z)) sb.append(" M");
+            sb.append(z.width).append("×").append(z.height)
+                    .append(isMjpeg(z) ? " M" : " U")
+                    .append("@").append(z.fps);
         }
         updateTvStatus(sb.toString());
     }
@@ -1228,6 +1275,7 @@ public class MainActivity extends Activity {
         qualitySizes.clear();
         qualityIndex = -1;
         lastGoodQuality = null;
+        currentQualityMode = "";
         qualityGeneration++;
         initCam();
         ui.postDelayed(this::openFirstUvc, 500);
@@ -1712,6 +1760,17 @@ public class MainActivity extends Activity {
             }
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null
+                && UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) {
+            if (cam == null) initCam();
+            ui.postDelayed(this::openFirstUvc, 250);
+        }
     }
 
     @Override
