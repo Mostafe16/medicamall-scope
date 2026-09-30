@@ -137,6 +137,7 @@ public class MainActivity extends Activity {
     private boolean showWebScreen = false;
     private int previewRotation = 0;
     private Bitmap lastTvBitmap;
+    private int[] previewArgb;
     private final ExecutorService previewExec = Executors.newSingleThreadExecutor();
     private final AtomicBoolean previewBusy = new AtomicBoolean(false);
     private long lastPreviewQueued = 0;
@@ -350,6 +351,8 @@ public class MainActivity extends Activity {
 
         web.addJavascriptInterface(new Bridge(), "BesNative");
         web.loadUrl(START_URL);
+        ui.postDelayed(() -> web.evaluateJavascript(
+                "window.__mmTvSetVisible&&window.__mmTvSetVisible(false)", null), 1200);
 
         if (!hasCameraPerm() || needsLegacyWrite()) requestPerms();
         initCam();
@@ -675,7 +678,7 @@ public class MainActivity extends Activity {
                     lastSavedPhotoFile = file;
                     lastSavedPhotoUri = published;
                     importNativeMediaIntoSession(file, "image/jpeg", "photo", "jpg", 0);
-                    updateTvStatus("تم حفظ الصورة وربطها بالجلسة ✓");
+                    updateTvStatus("تم حفظ الصورة ✓ • جاري ربطها بالجلسة...");
                     if (lastPhotoButton != null) lastPhotoButton.setText("الصور ✓");
                 } else {
                     updateTvStatus("فشل حفظ الصورة • " + String.valueOf(error));
@@ -964,7 +967,7 @@ public class MainActivity extends Activity {
         try {
             YuvImage yi = new YuvImage(work, ImageFormat.NV21, w, h, null);
             ByteArrayOutputStream bos = new ByteArrayOutputStream(w * h / 4);
-            yi.compressToJpeg(new Rect(0, 0, w, h), 88, bos);
+            yi.compressToJpeg(new Rect(0, 0, w, h), 100, bos);
             Map<String, String> hd = new HashMap<>();
             hd.put("Cache-Control", "no-store");
             hd.put("Access-Control-Allow-Origin", "*");
@@ -1065,9 +1068,9 @@ public class MainActivity extends Activity {
     }
 
     private void queueTvPreview() {
-        if (showWebScreen || tvPreview == null) return;
+        if (showWebScreen || showingPhotoReview || tvPreview == null) return;
         long now = SystemClock.uptimeMillis();
-        if (now - lastPreviewQueued < 66) return; // about 15 fps; stable on the X96
+        if (now - lastPreviewQueued < 50) return; // ~20 fps on the TV box
         if (!previewBusy.compareAndSet(false, true)) return;
         lastPreviewQueued = now;
 
@@ -1087,25 +1090,60 @@ public class MainActivity extends Activity {
         previewExec.execute(() -> {
             Bitmap bmp = null;
             try {
-                YuvImage yi = new YuvImage(copy, ImageFormat.NV21, w, h, null);
-                ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.max(64 * 1024, w * h / 5));
-                if (yi.compressToJpeg(new Rect(0, 0, w, h), 100, bos)) {
-                    byte[] jpg = bos.toByteArray();
-                    bmp = BitmapFactory.decodeByteArray(jpg, 0, jpg.length);
-                }
+                bmp = nv21ToBitmap(copy, w, h);
             } catch (Throwable ignored) { }
 
             final Bitmap ready = bmp;
             ui.post(() -> {
-                if (ready != null && tvPreview != null && !showWebScreen) {
+                if (ready != null && tvPreview != null && !showWebScreen && !showingPhotoReview) {
                     Bitmap old = lastTvBitmap;
                     lastTvBitmap = ready;
                     tvPreview.setImageBitmap(ready);
                     if (old != null && old != ready && !old.isRecycled()) old.recycle();
+                } else if (ready != null && !ready.isRecycled()) {
+                    ready.recycle();
                 }
                 previewBusy.set(false);
             });
         });
+    }
+
+    private Bitmap nv21ToBitmap(byte[] data, int width, int height) {
+        final int frameSize = width * height;
+        final int need = frameSize + frameSize / 2;
+        if (data == null || data.length < need || width <= 0 || height <= 0) return null;
+        if (previewArgb == null || previewArgb.length != frameSize) {
+            previewArgb = new int[frameSize];
+        }
+
+        int yp = 0;
+        for (int j = 0; j < height; j++) {
+            int uvp = frameSize + (j >> 1) * width;
+            int u = 0, v = 0;
+            for (int i = 0; i < width; i++, yp++) {
+                int y = (data[yp] & 0xff) - 16;
+                if (y < 0) y = 0;
+                if ((i & 1) == 0) {
+                    v = (data[uvp++] & 0xff) - 128;
+                    u = (data[uvp++] & 0xff) - 128;
+                }
+
+                int y1192 = 1192 * y;
+                int r = y1192 + 1634 * v;
+                int g = y1192 - 833 * v - 400 * u;
+                int b = y1192 + 2066 * u;
+
+                r = r < 0 ? 0 : Math.min(r, 262143);
+                g = g < 0 ? 0 : Math.min(g, 262143);
+                b = b < 0 ? 0 : Math.min(b, 262143);
+
+                previewArgb[yp] = 0xff000000
+                        | ((r << 6) & 0x00ff0000)
+                        | ((g >> 2) & 0x0000ff00)
+                        | ((b >> 10) & 0x000000ff);
+            }
+        }
+        return Bitmap.createBitmap(previewArgb, width, height, Bitmap.Config.ARGB_8888);
     }
 
     private void clearTvPreview() {
@@ -1124,6 +1162,8 @@ public class MainActivity extends Activity {
         screenButton.setText(showWebScreen ? "صورة المنظار" : "واجهة المرضى");
 
         if (showWebScreen) {
+            web.evaluateJavascript(
+                    "window.__mmTvSetVisible&&window.__mmTvSetVisible(true)", null);
             // Patient screen gets the entire TV canvas. The native toolbar/status
             // are useful on the scope preview but only cover clinical UI here.
             if (tvControls != null) tvControls.setVisibility(View.GONE);
@@ -1141,6 +1181,8 @@ public class MainActivity extends Activity {
                 }
             }, 180);
         } else {
+            web.evaluateJavascript(
+                    "window.__mmTvSetVisible&&window.__mmTvSetVisible(false)", null);
             if (tvControls != null) tvControls.setVisibility(View.VISIBLE);
             if (tvStatus != null) tvStatus.setVisibility(View.VISIBLE);
             if (scopeButtonIndicator != null) scopeButtonIndicator.setVisibility(View.VISIBLE);
@@ -1911,6 +1953,21 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void reloadWeb() { ui.post(() -> web.reload()); }
+
+        @JavascriptInterface
+        public void sessionImportResult(String type, boolean ok, String message) {
+            ui.post(() -> {
+                if (ok) {
+                    updateTvStatus("video".equals(type)
+                            ? "تم حفظ الفيديو وربطه بالجلسة ✓"
+                            : "تم حفظ الصورة وربطها بالجلسة ✓");
+                } else {
+                    updateTvStatus(("video".equals(type) ? "الفيديو" : "الصورة")
+                            + " محفوظ على الجهاز • ربط الجلسة فشل"
+                            + (message == null || message.isEmpty() ? "" : " • " + message));
+                }
+            });
+        }
 
         @JavascriptInterface
         public void toast(String msg) { MainActivity.this.toast(msg); }
