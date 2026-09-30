@@ -40,6 +40,38 @@ public class Updates {
     static final String APK_URL = BASE + "MedicaMall-Scope.apk";
     static final String UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36 MedicaMallScope";
     static final String SHIM = "<script src=\"native-shim.js\"></script>";
+    static final String SESSION_BRIDGE =
+            "/* ---------- Android native media bridge (in page scope) ---------- */\\n" +
+            "window.__mmPageImportNativeMedia = async function(item){\\n" +
+            "  try{\\n" +
+            "    if(!item || !item.url) throw new Error('missing media url');\\n" +
+            "    const r = await fetch(item.url,{cache:'no-store'});\\n" +
+            "    if(!r.ok) throw new Error('HTTP '+r.status);\\n" +
+            "    const blob = await r.blob();\\n" +
+            "    if(!blob || !blob.size) throw new Error('empty media');\\n" +
+            "    await saveMedia(blob,item.type||'photo',item.ext||'jpg',item.dur||0);\\n" +
+            "    await renderGallery();\\n" +
+            "    try{window.BesNative&&BesNative.sessionImportResult(item.type||'photo',true,'');}catch(e){}\\n" +
+            "  }catch(e){\\n" +
+            "    try{window.BesNative&&BesNative.sessionImportResult(item&&item.type||'photo',false,String(e&&e.message||e||'unknown'));}catch(x){}\\n" +
+            "  }\\n" +
+            "};\\n" +
+            "(function(){const q=window.__mmPendingNativeMedia||[];window.__mmPendingNativeMedia=[];q.forEach(x=>window.__mmPageImportNativeMedia(x));})();\\n";
+
+    static String patchExamHtml(String html) {
+        if (html == null) return null;
+        if (!html.contains("__mmPageImportNativeMedia")) {
+            String marker = "/* ---------- init ---------- */";
+            int p = html.indexOf(marker);
+            if (p >= 0) html = html.substring(0, p) + SESSION_BRIDGE + html.substring(p);
+        }
+        if (!html.contains("native-shim.js")) {
+            html = html.contains("<head>")
+                    ? html.replaceFirst("<head>", "<head>" + SHIM)
+                    : SHIM + html;
+        }
+        return html;
+    }
 
     private static File pendingApk;
     private static boolean dialogShown;
@@ -58,7 +90,7 @@ public class Updates {
                 if (!m.find()) return;
                 String html = new String(Base64.decode(m.group(1), Base64.DEFAULT), StandardCharsets.UTF_8);
                 if (!html.contains("btnSnap") || !html.contains("</html>")) return; // sanity check
-                html = html.contains("<head>") ? html.replaceFirst("<head>", "<head>" + SHIM) : SHIM + html;
+                html = patchExamHtml(html);
 
                 File f = webFile(c);
                 String current;
@@ -135,7 +167,7 @@ public class Updates {
             return;
         }
         pendingApk = null;
-        Uri u = FileProvider.getUriForFile(a, "com.medicamall.scope.files", f);
+        Uri u = FileProvider.getUriForFile(a, a.getPackageName() + ".files", f);
         Intent i = new Intent(Intent.ACTION_VIEW);
         i.setDataAndType(u, "application/vnd.android.package-archive");
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
