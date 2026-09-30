@@ -114,6 +114,30 @@
   };
 
 
+  /* Native Android capture -> patient-session IndexedDB */
+  window.__mmImportNativeMedia = async function (item) {
+    if (!item || !item.url) return;
+    try {
+      var r = await fetch(item.url, { cache:'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var blob = await r.blob();
+      if (typeof saveMedia !== 'function') throw new Error('session media store not ready');
+      await saveMedia(blob, item.type || 'photo', item.ext || 'jpg', item.dur || 0);
+      if (typeof renderGallery === 'function') await renderGallery();
+      if (typeof toast === 'function') {
+        toast(item.type === 'video' ? '🎥 الفيديو اتضاف للجلسة' : '📷 الصورة اتضافت للجلسة');
+      }
+    } catch (e) {
+      console.warn('native media import', e);
+      try { N.toast('الحفظ تم على الجهاز لكن ربط الجلسة فشل'); } catch (x) {}
+    }
+  };
+  setTimeout(function () {
+    var q = window.__mmPendingNativeMedia || [];
+    window.__mmPendingNativeMedia = [];
+    q.forEach(function (x) { window.__mmImportNativeMedia(x); });
+  }, 900);
+
   /* ---------------- Android TV / D-pad adaptation ---------------- */
   var installTvMode = function () {
     if (!document.body || document.documentElement.getAttribute('data-mm-tv') === '1') return;
@@ -123,10 +147,28 @@
     css.id = 'mmTvCss';
     css.textContent =
       ':focus{outline:4px solid #ffc233!important;outline-offset:3px!important;box-shadow:0 0 0 3px rgba(17,110,181,.35)!important}' +
-      'button,a[href],select,input,textarea,[role="button"],[onclick]{scroll-margin:110px}' +
-      '.mm-tv-stepper{display:grid;grid-template-columns:42px 62px 42px;align-items:center;justify-content:center;gap:7px;margin:5px auto 10px!important;direction:ltr;width:max-content;max-width:100%}' +
-      '.mm-tv-step-btn{width:42px!important;height:40px!important;min-width:42px!important;min-height:40px!important;padding:0!important;border:0!important;border-radius:9px!important;background:#116eb5!important;color:#fff!important;font-size:23px!important;font-weight:900!important;line-height:1!important}' +
-      '.mm-tv-step-val{min-width:62px!important;padding:8px 6px!important;border:1px solid #d9e5ef!important;border-radius:9px!important;background:#fff!important;color:#16324a!important;text-align:center!important;font:700 15px/1.2 system-ui,sans-serif!important}' +
+      'button,a[href],select,input,textarea,[role="button"],[onclick]{scroll-margin:90px}' +
+      '@media (min-width:900px){' +
+      'body{overflow:auto!important;background:#eef5fc!important}' +
+      'header{padding:7px 12px!important;gap:8px!important}' +
+      '.logo{width:42px!important;height:42px!important}.brand h1{font-size:17px!important}.brand small{font-size:11px!important}' +
+      '.chips{gap:5px!important}.chip{padding:4px 9px!important;font-size:12px!important}' +
+      'main{grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr)!important;gap:10px!important;padding:10px!important}' +
+      '.card{padding:10px!important;border-radius:12px!important}' +
+      '.stage{aspect-ratio:1/1!important;max-height:calc(100vh - 300px)!important;width:min(100%,calc(100vh - 300px))!important;border-radius:12px!important}' +
+      '.toolbar{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:6px!important;margin-top:8px!important}' +
+      '.toolbar .sep{display:none!important}.toolbar button,.toolbar select{width:100%!important;min-width:0!important;max-width:none!important;padding:8px 8px!important;font-size:13px!important;min-height:42px!important}' +
+      '.sliders{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px 10px!important;margin-top:8px!important}' +
+      '.sliders>div{text-align:center!important;position:relative!important}.sliders label{font-size:12px!important;margin:0 0 3px!important}' +
+      'aside{gap:10px!important}.side h2{font-size:15px!important;margin-bottom:6px!important}.patient{padding:8px 10px!important}' +
+      '.gallery{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important;max-height:250px!important}' +
+      '.actions{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:6px!important}.actions button{width:100%!important;padding:7px 6px!important;font-size:12px!important}' +
+      '.hint{display:none!important}footer{display:none!important}' +
+      'dialog{width:min(620px,92vw)!important}.dlg-b{max-height:64vh!important}' +
+      '}' +
+      '.mm-tv-stepper{display:grid;grid-template-columns:40px 58px 40px;align-items:center;justify-content:center;gap:6px;margin:4px auto 8px!important;direction:ltr;width:max-content;max-width:100%}' +
+      '.mm-tv-step-btn{width:40px!important;height:38px!important;min-width:40px!important;min-height:38px!important;padding:0!important;border:0!important;border-radius:9px!important;background:#116eb5!important;color:#fff!important;font-size:22px!important;font-weight:900!important;line-height:1!important}' +
+      '.mm-tv-step-val{min-width:58px!important;padding:7px 5px!important;border:1px solid #d9e5ef!important;border-radius:9px!important;background:#fff!important;color:#16324a!important;text-align:center!important;font:700 14px/1.2 system-ui,sans-serif!important}' +
       'input[type="range"][data-mm-tv-step-id]{position:absolute!important;opacity:0!important;pointer-events:none!important;width:1px!important;height:1px!important;margin:0!important}' +
       '@media (min-width:900px){button,select,input[type="button"],input[type="submit"]{min-height:46px}}';
     document.head.appendChild(css);
