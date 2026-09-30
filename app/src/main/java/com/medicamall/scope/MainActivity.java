@@ -977,8 +977,28 @@ public class MainActivity extends Activity {
         web.setVisibility(showWebScreen ? View.VISIBLE : View.GONE);
         tvPreview.setVisibility(showWebScreen ? View.GONE : View.VISIBLE);
         screenButton.setText(showWebScreen ? "صورة المنظار" : "واجهة المرضى");
-        updateTvStatus(showWebScreen ? "واجهة المرضى • التحكم من الشريط السفلي" :
-                (camOpen ? "صورة المنظار • " + fw + "×" + fh : "صورة المنظار • في انتظار الاتصال"));
+
+        if (showWebScreen) {
+            web.setFocusable(true);
+            web.setFocusableInTouchMode(true);
+            web.requestFocus();
+            ui.postDelayed(() -> {
+                if (web != null) {
+                    web.evaluateJavascript(
+                            "window.__mmTvFocusFirst&&window.__mmTvFocusFirst()", null);
+                }
+            }, 180);
+        } else {
+            web.clearFocus();
+            web.setFocusable(false);
+            web.setFocusableInTouchMode(false);
+            if (retryButton != null) retryButton.requestFocus();
+        }
+
+        updateTvStatus(showWebScreen
+                ? "واجهة المرضى • الأسهم للحركة و OK للاختيار • Back يرجع للمنظار"
+                : (camOpen ? "صورة المنظار • " + fw + "×" + fh
+                : "صورة المنظار • في انتظار الاتصال"));
     }
 
     private void refreshQualitySizes() {
