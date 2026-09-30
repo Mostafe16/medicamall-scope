@@ -124,10 +124,10 @@
     css.textContent =
       ':focus{outline:4px solid #ffc233!important;outline-offset:3px!important;box-shadow:0 0 0 3px rgba(17,110,181,.35)!important}' +
       'button,a[href],select,input,textarea,[role="button"],[onclick]{scroll-margin:110px}' +
-      '.mm-tv-stepper{display:inline-flex;align-items:center;gap:8px;margin:7px 8px;vertical-align:middle;direction:ltr}' +
-      '.mm-tv-step-btn{width:48px!important;height:44px!important;min-width:48px!important;min-height:44px!important;padding:0!important;border:0!important;border-radius:10px!important;background:#116eb5!important;color:#fff!important;font-size:25px!important;font-weight:900!important;line-height:1!important}' +
-      '.mm-tv-step-val{min-width:76px;padding:10px 12px;border:2px solid #d9e5ef;border-radius:10px;background:#fff;color:#16324a;text-align:center;font:700 17px/1.2 system-ui,sans-serif}' +
-      'input[type="range"]{min-width:180px}' +
+      '.mm-tv-stepper{display:grid;grid-template-columns:42px 62px 42px;align-items:center;justify-content:center;gap:7px;margin:5px auto 10px!important;direction:ltr;width:max-content;max-width:100%}' +
+      '.mm-tv-step-btn{width:42px!important;height:40px!important;min-width:42px!important;min-height:40px!important;padding:0!important;border:0!important;border-radius:9px!important;background:#116eb5!important;color:#fff!important;font-size:23px!important;font-weight:900!important;line-height:1!important}' +
+      '.mm-tv-step-val{min-width:62px!important;padding:8px 6px!important;border:1px solid #d9e5ef!important;border-radius:9px!important;background:#fff!important;color:#16324a!important;text-align:center!important;font:700 15px/1.2 system-ui,sans-serif!important}' +
+      'input[type="range"][data-mm-tv-step-id]{position:absolute!important;opacity:0!important;pointer-events:none!important;width:1px!important;height:1px!important;margin:0!important}' +
       '@media (min-width:900px){button,select,input[type="button"],input[type="submit"]{min-height:46px}}';
     document.head.appendChild(css);
 
@@ -164,7 +164,7 @@
 
     var addStepper = function (input) {
       if (!input || input.disabled || input.readOnly || input.getAttribute('data-mm-tv-step-id')) return;
-      if (input.type !== 'range' && input.type !== 'number') return;
+      if (input.type !== 'range') return;
       var id = 'mmstep' + Math.random().toString(36).slice(2, 9);
       input.setAttribute('data-mm-tv-step-id', id);
       // On TV the physical slider/number input is display-only. Remote control
@@ -209,7 +209,7 @@
         if (el.disabled || el.getAttribute('aria-hidden') === 'true') return;
         if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
       });
-      Array.prototype.forEach.call(root.querySelectorAll('input[type="range"],input[type="number"]'), addStepper);
+      Array.prototype.forEach.call(root.querySelectorAll('input[type="range"]'), addStepper);
     };
 
     var visibleFocusables = function () {
@@ -256,7 +256,7 @@
     document.addEventListener('keydown', function (e) {
       var el = document.activeElement;
       if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') &&
-          el && (el.type === 'range' || el.type === 'number')) {
+          el && el.type === 'range') {
         e.preventDefault();
         stepValue(el, e.key === 'ArrowRight' ? 1 : -1);
         return;
@@ -281,7 +281,7 @@
       muts.forEach(function (m) {
         Array.prototype.forEach.call(m.addedNodes || [], function (n) {
           if (n && n.nodeType === 1) {
-            if (n.matches && n.matches('input[type="range"],input[type="number"]')) addStepper(n);
+            if (n.matches && n.matches('input[type="range"]')) addStepper(n);
             makeFocusable(n);
           }
         });
