@@ -117,53 +117,15 @@
   };
 
 
-  /* Native Android capture -> patient-session IndexedDB */
-  var mmImportRetryMs = 180;
-  window.__mmImportNativeMedia = async function (item, attempt) {
-    attempt = attempt || 0;
+  /* Native Android capture -> patient-session bridge */
+  window.__mmImportNativeMedia = function (item) {
     if (!item || !item.url) return;
-
-    // The page opens IndexedDB asynchronously. Native capture can finish before
-    // that startup completes, especially on slow TV-box storage.
-    if (typeof saveMedia !== 'function' || typeof db === 'undefined' || !db) {
-      if (attempt < 35) {
-        return setTimeout(function () {
-          window.__mmImportNativeMedia(item, attempt + 1);
-        }, mmImportRetryMs);
-      }
-      try { N.sessionImportResult(item.type || 'photo', false, 'قاعدة بيانات الجلسة غير جاهزة'); } catch (x) {}
+    if (typeof window.__mmPageImportNativeMedia === 'function') {
+      window.__mmPageImportNativeMedia(item);
       return;
     }
-
-    try {
-      var r = await fetch(item.url, { cache:'no-store' });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      var blob = await r.blob();
-      if (!blob || !blob.size) throw new Error('empty media');
-      await saveMedia(blob, item.type || 'photo', item.ext || 'jpg', item.dur || 0);
-      if (typeof renderGallery === 'function') await renderGallery();
-      try { N.sessionImportResult(item.type || 'photo', true, ''); } catch (x) {}
-      if (typeof toast === 'function') {
-        toast(item.type === 'video' ? '🎥 الفيديو اتضاف للجلسة' : '📷 الصورة اتضافت للجلسة');
-      }
-    } catch (e) {
-      if (attempt < 12) {
-        return setTimeout(function () {
-          window.__mmImportNativeMedia(item, attempt + 1);
-        }, mmImportRetryMs);
-      }
-      console.warn('native media import', e);
-      try {
-        N.sessionImportResult(item.type || 'photo', false,
-          (e && e.message) ? String(e.message) : 'unknown');
-      } catch (x) {}
-    }
+    (window.__mmPendingNativeMedia = window.__mmPendingNativeMedia || []).push(item);
   };
-  setTimeout(function () {
-    var q = window.__mmPendingNativeMedia || [];
-    window.__mmPendingNativeMedia = [];
-    q.forEach(function (x) { window.__mmImportNativeMedia(x, 0); });
-  }, 900);
 
   /* ---------------- Android TV / D-pad adaptation ---------------- */
   var installTvMode = function () {
@@ -176,22 +138,30 @@
       ':focus{outline:4px solid #ffc233!important;outline-offset:3px!important;box-shadow:0 0 0 3px rgba(17,110,181,.35)!important}' +
       'button,a[href],select,input,textarea,[role="button"],[onclick]{scroll-margin:90px}' +
       '@media (min-width:900px){' +
-      'body{overflow:auto!important;background:#eef5fc!important}' +
-      'header{padding:7px 12px!important;gap:8px!important}' +
-      '.logo{width:42px!important;height:42px!important}.brand h1{font-size:17px!important}.brand small{font-size:11px!important}' +
-      '.chips{gap:5px!important}.chip{padding:4px 9px!important;font-size:12px!important}' +
-      'main{grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr)!important;gap:10px!important;padding:10px!important}' +
-      '.card{padding:10px!important;border-radius:12px!important}' +
-      '.stage{aspect-ratio:1/1!important;max-height:calc(100vh - 300px)!important;width:min(100%,calc(100vh - 300px))!important;border-radius:12px!important}' +
-      '.toolbar{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:6px!important;margin-top:8px!important}' +
-      '.toolbar .sep{display:none!important}.toolbar button,.toolbar select{width:100%!important;min-width:0!important;max-width:none!important;padding:8px 8px!important;font-size:13px!important;min-height:42px!important}' +
-      '.sliders{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px 10px!important;margin-top:8px!important}' +
-      '.sliders>div{text-align:center!important;position:relative!important}.sliders label{font-size:12px!important;margin:0 0 3px!important}' +
-      'aside{gap:10px!important}.side h2{font-size:15px!important;margin-bottom:6px!important}.patient{padding:8px 10px!important}' +
-      '.gallery{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important;max-height:250px!important}' +
-      '.actions{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:6px!important}.actions button{width:100%!important;padding:7px 6px!important;font-size:12px!important}' +
+      'html,body{width:100%!important;min-height:100%!important;overflow:auto!important;background:#eef5fc!important}' +
+      'header{position:sticky!important;top:0!important;z-index:20!important;padding:6px 12px!important;gap:8px!important;min-height:58px!important}' +
+      '.brand{gap:8px!important}.logo{width:40px!important;height:40px!important}.bes{height:20px!important}.brand h1{font-size:16px!important}.brand small{font-size:10px!important}' +
+      '.chips{gap:5px!important;align-items:center!important}.chip{padding:4px 8px!important;font-size:11px!important;min-height:32px!important}' +
+      '#btnPatients,#btnSettings{min-width:120px!important;min-height:42px!important;font-size:13px!important;padding:7px 12px!important}' +
+      'main{grid-template-columns:minmax(0,1.35fr) minmax(315px,.65fr)!important;gap:10px!important;padding:10px!important;align-items:start!important}' +
+      '.card{padding:10px!important;border-radius:12px!important;box-shadow:0 2px 9px rgba(10,63,125,.08)!important}' +
+      '.stage{aspect-ratio:1/1!important;max-height:calc(100vh - 290px)!important;width:min(100%,calc(100vh - 290px))!important;min-height:300px!important;border-radius:12px!important}' +
+      '.ov{font-size:12px!important}.toolbar{display:grid!important;grid-template-columns:repeat(5,minmax(0,1fr))!important;gap:6px!important;margin-top:8px!important}' +
+      '.toolbar .sep{display:none!important}.toolbar button,.toolbar select{width:100%!important;min-width:0!important;max-width:none!important;padding:7px 7px!important;font-size:12px!important;min-height:42px!important;justify-content:center!important;text-align:center!important}' +
+      '#btnSnap,#btnRec{font-size:14px!important;font-weight:800!important}#btnRescan,#camQuick{display:none!important}' +
+      '.sliders{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:6px!important;margin-top:8px!important}' +
+      '.sliders>div{text-align:center!important;position:relative!important;padding:7px 4px!important;border:1px solid #dce9f5!important;border-radius:10px!important;background:#f8fbff!important}.sliders label{font-size:11px!important;margin:0 0 2px!important;line-height:1.25!important}' +
+      'aside{gap:10px!important}.side h2{font-size:14px!important;margin-bottom:6px!important;gap:6px!important}.side h2 span{gap:5px!important}.side h2 button{min-height:36px!important;padding:6px 9px!important;font-size:11px!important}' +
+      '.patient{padding:8px 10px!important}.patient b{font-size:15px!important}.patient div{font-size:11px!important}' +
+      '.gallery{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:7px!important;max-height:310px!important}.item{border-radius:9px!important}.item:focus{border-color:#ffc233!important;outline:3px solid #ffc233!important}' +
+      '.actions{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important}.actions button,.actions .upl{width:100%!important;min-height:40px!important;padding:7px 7px!important;font-size:11px!important;justify-content:center!important}' +
       '.hint{display:none!important}footer{display:none!important}' +
-      'dialog{width:min(620px,92vw)!important}.dlg-b{max-height:64vh!important}' +
+      'dialog{width:min(720px,92vw)!important;max-height:88vh!important;border-radius:14px!important}.dlg-h{padding:10px 14px!important}.dlg-h h3{font-size:16px!important}.dlg-h button{width:44px!important;height:40px!important;justify-content:center!important}' +
+      '.dlg-b{padding:10px 14px!important;max-height:66vh!important;overflow:auto!important}.dlg-b label{font-size:12px!important;margin:6px 0 3px!important}.dlg-b input,.dlg-b select,.dlg-b textarea{min-height:44px!important;font-size:13px!important;padding:8px 10px!important}.dlg-b textarea{min-height:88px!important}' +
+      '.dlg-f{padding:9px 14px!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}.dlg-f .sep{display:none!important}.dlg-f button{width:100%!important;min-height:42px!important;justify-content:center!important}' +
+      '.grid2{gap:0 10px!important}.plist{gap:7px!important}.prow{padding:7px 9px!important;border-radius:10px!important;gap:8px!important}.prow b{font-size:13px!important}.prow small{font-size:10px!important}.prow button{min-height:38px!important;padding:6px 10px!important;font-size:11px!important}' +
+      '.sigbox{padding:8px!important;margin-top:8px!important}#sigPad{display:none!important}.sigbox>label:nth-of-type(2){display:none!important}.viewer img,.viewer video{max-height:58vh!important;object-fit:contain!important}' +
+      '#dlgShare .actions,#dlgSettings .actions{grid-template-columns:repeat(2,minmax(0,1fr))!important}' +
       '}' +
       '.mm-tv-stepper{display:grid;grid-template-columns:40px 58px 40px;align-items:center;justify-content:center;gap:6px;margin:4px auto 8px!important;direction:ltr;width:max-content;max-width:100%}' +
       '.mm-tv-step-btn{width:40px!important;height:38px!important;min-width:40px!important;min-height:38px!important;padding:0!important;border:0!important;border-radius:9px!important;background:#116eb5!important;color:#fff!important;font-size:22px!important;font-weight:900!important;line-height:1!important}' +
@@ -273,16 +243,22 @@
 
     var makeFocusable = function (root) {
       root = root && root.querySelectorAll ? root : document;
-      var q = 'button,a[href],input,select,textarea,[role="button"],[onclick]';
-      Array.prototype.forEach.call(root.querySelectorAll(q), function (el) {
+      var q = 'button,a[href],input,select,textarea,[role="button"],[onclick],.item,.upl';
+      var list = [];
+      if (root.matches && root.matches(q)) list.push(root);
+      Array.prototype.push.apply(list, root.querySelectorAll(q));
+      Array.prototype.forEach.call(list, function (el) {
         if (el.disabled || el.getAttribute('aria-hidden') === 'true') return;
         if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
+        if (el.classList && el.classList.contains('item')) el.setAttribute('role','button');
+        if (el.classList && el.classList.contains('upl')) el.setAttribute('role','button');
       });
+      if (root.matches && root.matches('input[type="range"]')) addStepper(root);
       Array.prototype.forEach.call(root.querySelectorAll('input[type="range"]'), addStepper);
     };
 
     var visibleFocusables = function () {
-      var q = 'button:not([disabled]),a[href],input:not([disabled]):not([data-mm-tv-step-id]),select:not([disabled]),textarea:not([disabled]),[role="button"],[onclick]';
+      var q = 'button:not([disabled]),a[href],input:not([disabled]):not([data-mm-tv-step-id]),select:not([disabled]),textarea:not([disabled]),[role="button"],[onclick],.item,.upl';
       return Array.prototype.filter.call(document.querySelectorAll(q), function (el) {
         var r = el.getBoundingClientRect();
         var st = getComputedStyle(el);
@@ -330,6 +306,29 @@
         stepValue(el, e.key === 'ArrowRight' ? 1 : -1);
         return;
       }
+      if (e.key === 'Enter' && el && el.classList && el.classList.contains('upl')) {
+        e.preventDefault();
+        var fi = el.querySelector('input[type="file"]');
+        try { fi && fi.click(); } catch (x) {}
+        return;
+      }
+      if (e.key === 'Enter' && el && el.classList && el.classList.contains('item')) {
+        e.preventDefault();
+        var now = Date.now();
+        if (el.__mmLastEnter && now - el.__mmLastEnter < 450) {
+          el.__mmLastEnter = 0;
+          try { el.dispatchEvent(new MouseEvent('dblclick',{bubbles:true})); } catch (x) {}
+        } else {
+          el.__mmLastEnter = now;
+          setTimeout(function(){
+            if (el.__mmLastEnter) {
+              el.__mmLastEnter = 0;
+              try { el.click(); } catch (x) {}
+            }
+          }, 470);
+        }
+        return;
+      }
       if (e.key === 'Enter' && el && el.matches &&
           el.matches('[role="button"],[onclick]') && el.tagName !== 'BUTTON' && el.tagName !== 'A') {
         e.preventDefault();
@@ -346,6 +345,27 @@
     }, true);
 
     makeFocusable(document);
+
+    // The Android TV build has one fixed UVC scope. Browser camera selectors only
+    // add noise on TV, so keep the useful clinic/report settings and hide these.
+    ['camSel','resSel'].forEach(function(id){
+      var el=document.getElementById(id);
+      if(el){ el.style.display='none'; var p=el.previousElementSibling; if(p&&p.tagName==='LABEL') p.style.display='none'; }
+    });
+
+    document.querySelectorAll('dialog').forEach(function(dlg){
+      var ob = new MutationObserver(function(){
+        if(dlg.open){
+          makeFocusable(dlg);
+          setTimeout(function(){
+            var f = dlg.querySelector('input:not([type=file]):not([disabled]),select:not([disabled]),button:not([disabled]),textarea:not([disabled]),.upl');
+            if(f) try{f.focus();}catch(e){}
+          },60);
+        }
+      });
+      ob.observe(dlg,{attributes:true,attributeFilter:['open']});
+    });
+
     var mo = new MutationObserver(function (muts) {
       muts.forEach(function (m) {
         Array.prototype.forEach.call(m.addedNodes || [], function (n) {
