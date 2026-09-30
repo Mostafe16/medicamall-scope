@@ -13,6 +13,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
+import android.graphics.SurfaceTexture;
 import android.graphics.YuvImage;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbInterface;
@@ -31,6 +32,7 @@ import android.provider.MediaStore;
 import android.util.Base64;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -54,6 +56,7 @@ import androidx.webkit.WebViewAssetLoader;
 
 import com.herohan.uvcapp.CameraHelper;
 import com.herohan.uvcapp.ICameraHelper;
+import com.herohan.uvcapp.ImageCapture;
 import com.herohan.uvcapp.VideoCapture;
 import com.herohan.uvcapp.VideoCaptureConfig;
 import com.serenegiant.usb.Size;
@@ -101,6 +104,10 @@ public class MainActivity extends Activity {
 
     // ---- TV / remote UI ----
     private ImageView tvPreview;
+    private TextureView directPreview;
+    private boolean directSurfaceAttached = false;
+    private ImageView photoReview;
+    private boolean showingPhotoReview = false;
     private TextView tvStatus;
     private TextView scopeButtonIndicator;
     private int scopeButtonCount = 0;
@@ -182,16 +189,45 @@ public class MainActivity extends Activity {
         root.addView(web, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
+        // Legacy bitmap preview is kept only as a fallback. Normal TV display uses
+        // a direct UVC SurfaceTexture to avoid the extra NV21 -> JPEG -> Bitmap loss.
         tvPreview = new ImageView(this);
         tvPreview.setBackgroundColor(Color.BLACK);
         tvPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        tvPreview.setVisibility(View.GONE);
         root.addView(tvPreview, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        directPreview = new TextureView(this);
+        directPreview.setBackgroundColor(Color.BLACK);
+        directPreview.setOpaque(true);
+        directPreview.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
+                attachDirectPreviewSurface();
+            }
+            @Override public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) { }
+            @Override
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+                detachDirectPreviewSurface();
+                return true;
+            }
+            @Override public void onSurfaceTextureUpdated(SurfaceTexture surface) { }
+        });
+        root.addView(directPreview, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+        photoReview = new ImageView(this);
+        photoReview.setBackgroundColor(Color.BLACK);
+        photoReview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        photoReview.setVisibility(View.GONE);
+        root.addView(photoReview, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         tvStatus = new TextView(this);
         tvStatus.setText("TV TEST • في انتظار المنظار");
         tvStatus.setTextColor(Color.WHITE);
-        tvStatus.setTextSize(18);
+        tvStatus.setTextSize(15);
         tvStatus.setPadding(dp(16), dp(10), dp(16), dp(10));
         tvStatus.setBackgroundColor(0xAA000000);
         FrameLayout.LayoutParams statusLp = new FrameLayout.LayoutParams(
@@ -203,7 +239,7 @@ public class MainActivity extends Activity {
         scopeButtonIndicator = new TextView(this);
         scopeButtonIndicator.setText("زرار المنظار: 0");
         scopeButtonIndicator.setTextColor(Color.WHITE);
-        scopeButtonIndicator.setTextSize(20);
+        scopeButtonIndicator.setTextSize(16);
         scopeButtonIndicator.setGravity(Gravity.CENTER);
         scopeButtonIndicator.setPadding(dp(18), dp(10), dp(18), dp(10));
         scopeButtonIndicator.setBackgroundColor(0xCC116EB5);
@@ -375,47 +411,33 @@ public class MainActivity extends Activity {
         try { list = cam.getSupportedSizeList(); } catch (Throwable ignored) { }
         if (list == null || list.isEmpty()) return null;
 
-        // Quality mode for the X96: use the largest MJPEG size that stays within
-        // roughly one megapixel. The first diagnostic build deliberately picked
-        // the smallest stream (400x400); the box proved stable at 30 FPS, so we
-        // can now step up quality without jumping straight to a multi-megapixel stream.
-        Size bestMjpeg = null;
-        Size bestAny = null;
-        final int MAX_PIXELS = 1280 * 960;
+        Size best = null;
         for (Size z : list) {
-            int pixels = z.width * z.height;
-            if (pixels <= MAX_PIXELS) {
-                if (isMjpeg(z) && (bestMjpeg == null
-                        || pixels > bestMjpeg.width * bestMjpeg.height)) {
-                    bestMjpeg = z;
-                }
-                if (bestAny == null || pixels > bestAny.width * bestAny.height) {
-                    bestAny = z;
-                }
+            if (z == null) continue;
+            if (best == null) {
+                best = z;
+                continue;
+            }
+            int p = z.width * z.height;
+            int bp = best.width * best.height;
+            if (p > bp
+                    || (p == bp && !isMjpeg(z) && isMjpeg(best))
+                    || (p == bp && isMjpeg(z) == isMjpeg(best) && z.fps > best.fps)) {
+                best = z;
             }
         }
-        if (bestMjpeg != null) return bestMjpeg;
-        if (bestAny != null) return bestAny;
-
-        // If every advertised mode is larger, fall back to the smallest MJPEG
-        // rather than failing the camera open.
-        Size smallestMjpeg = null, smallestAny = null;
-        for (Size z : list) {
-            int pixels = z.width * z.height;
-            if (isMjpeg(z) && (smallestMjpeg == null
-                    || pixels < smallestMjpeg.width * smallestMjpeg.height)) {
-                smallestMjpeg = z;
-            }
-            if (smallestAny == null || pixels < smallestAny.width * smallestAny.height) {
-                smallestAny = z;
-            }
-        }
-        return smallestMjpeg != null ? smallestMjpeg : smallestAny;
+        return best;
     }
 
     private void initCam() {
         if (cam != null) return;
         cam = new CameraHelper();
+        try {
+            cam.setImageCaptureConfig(
+                    cam.getImageCaptureConfig()
+                            .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                            .setJpegCompressionQuality(100));
+        } catch (Throwable ignored) { }
         cam.setStateCallback(new ICameraHelper.StateCallback() {
             @Override
             public void onAttach(UsbDevice device) {
@@ -465,7 +487,7 @@ public class MainActivity extends Activity {
                 // The device is now fully opened; this is the reliable point to ask it
                 // for every UVC mode. If a higher mode exists, try one step above the
                 // default 400x400 automatically, with watchdog fallback.
-                ui.postDelayed(MainActivity.this::tryOneHigherQualityAutomatically, 700);
+                // Highest advertised mode is selected at open; no noisy quality cycling on TV.
 
                 try {
                     VideoCaptureConfig vc = cam.getVideoCaptureConfig();
@@ -480,12 +502,15 @@ public class MainActivity extends Activity {
                 } catch (Throwable ignored) { }
                 cam.startPreview();
                 camOpen = true;
-                updateTvStatus("المنظار متصل • " + fw + "×" + fh + " • في انتظار أول Frame");
+                attachDirectPreviewSurface();
+                updateDirectPreviewLayout();
+                updateTvStatus("المنظار متصل • " + currentQualityMode);
                 js("open");
             }
 
             @Override
             public void onCameraClose(UsbDevice device) {
+                detachDirectPreviewSurface();
                 camOpen = false;
                 updateTvStatus("الكاميرا اتقفلت");
                 js("closed");
@@ -496,6 +521,7 @@ public class MainActivity extends Activity {
 
             @Override
             public void onDetach(UsbDevice device) {
+                detachDirectPreviewSurface();
                 camOpen = false;
                 updateTvStatus("المنظار اتفصل");
                 clearTvPreview();
@@ -566,7 +592,7 @@ public class MainActivity extends Activity {
                         + String.format(Locale.US, "%.1f", lastFps) + " FPS");
             }
         }
-        queueTvPreview();
+        // Direct TextureView handles the visible preview; frame callback remains for Wi-Fi/diagnostics.
     }
 
     private void onScopeButton() {
@@ -601,91 +627,103 @@ public class MainActivity extends Activity {
     }
 
     private void captureStillPhoto() {
-        if (!camOpen || frame == null) {
+        if (!camOpen || cam == null) {
             updateTvStatus("الصورة لم تُحفظ • المنظار غير جاهز");
             return;
         }
-        if (videoTransition) {
-            updateTvStatus("انتظر لحظة حتى يكتمل تغيير حالة التسجيل");
+        if (videoTransition || videoRecording) {
+            updateTvStatus("أوقف تسجيل الفيديو قبل التقاط صورة");
             return;
         }
 
+        String name = "Scope_" + fileStamp() + ".jpg";
+        File rootDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        if (rootDir == null) rootDir = new File(getFilesDir(), "Pictures");
+        File dir = new File(rootDir, "MedicaMall");
+        if (!dir.exists()) dir.mkdirs();
+        final File file = new File(dir, name);
+
+        flashCapture();
+        updateTvStatus("جاري التقاط الصورة...");
+
+        try {
+            ImageCapture.OutputFileOptions options =
+                    new ImageCapture.OutputFileOptions.Builder(file).build();
+            cam.takePicture(options, new ImageCapture.OnImageCaptureCallback() {
+                @Override
+                public void onImageSaved(ImageCapture.OutputFileResults outputFileResults) {
+                    if (!file.exists() || file.length() == 0) {
+                        ui.post(() -> updateTvStatus("فشل الحفظ • ملف الصورة فارغ"));
+                        return;
+                    }
+                    lastSavedPhotoFile = file;
+                    previewExec.execute(() -> {
+                        Uri gallery = null;
+                        String err = null;
+                        try {
+                            gallery = publishPhotoToGallery(file, file.getName());
+                        } catch (Throwable t) {
+                            err = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+                        }
+                        final Uri g = gallery;
+                        final String e = err;
+                        ui.post(() -> {
+                            lastSavedPhotoUri = g;
+                            updateTvStatus(g != null
+                                    ? "تم حفظ الصورة ✓ • Pictures/MedicaMall"
+                                    : "الصورة محفوظة داخل التطبيق ✓" + (e == null ? "" : " • " + e));
+                            if (scopeButtonIndicator != null) {
+                                scopeButtonIndicator.setText("📷 تم حفظ الصورة");
+                                scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
+                                ui.postDelayed(MainActivity.this::resetScopeIndicator, 1400);
+                            }
+                            if (lastPhotoButton != null) lastPhotoButton.setText("الصور ✓");
+                        });
+                    });
+                }
+
+                @Override
+                public void onError(int imageCaptureError, String message, Throwable cause) {
+                    // Fallback to the latest NV21 frame if the library capture path fails.
+                    captureStillFallback(file, message);
+                }
+            });
+        } catch (Throwable t) {
+            captureStillFallback(file, t.getMessage());
+        }
+    }
+
+    private void captureStillFallback(File file, String reason) {
         byte[] copy;
         int w, h;
         synchronized (frameLock) {
-            if (frame == null) return;
+            if (frame == null) {
+                ui.post(() -> updateTvStatus("فشل حفظ الصورة • " + String.valueOf(reason)));
+                return;
+            }
             copy = new byte[frame.length];
             System.arraycopy(frame, 0, copy, 0, frame.length);
-            w = fw;
-            h = fh;
+            w = fw; h = fh;
         }
 
-        flashCapture();
-        updateTvStatus("جاري حفظ الصورة...");
         previewExec.execute(() -> {
-            String name = "Scope_" + fileStamp() + ".jpg";
-            File privateFile = null;
-            Uri galleryUri = null;
-            String publicPlace = null;
-            String error = null;
-
-            try {
-                // First create a guaranteed fallback copy in app-owned external storage.
-                // This survives MediaStore quirks on cheap TV-box firmware.
-                File rootDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
-                if (rootDir == null) rootDir = new File(getFilesDir(), "Pictures");
-                File dir = new File(rootDir, "MedicaMall");
-                if (!dir.exists() && !dir.mkdirs() && !dir.isDirectory()) {
-                    throw new Exception("can't create backup folder");
+            try (OutputStream out = new FileOutputStream(file)) {
+                YuvImage yi = new YuvImage(copy, ImageFormat.NV21, w, h, null);
+                if (!yi.compressToJpeg(new Rect(0, 0, w, h), 100, out)) {
+                    throw new Exception("fallback jpeg failed");
                 }
-                privateFile = new File(dir, name);
-                try (OutputStream out = new FileOutputStream(privateFile)) {
-                    YuvImage yi = new YuvImage(copy, ImageFormat.NV21, w, h, null);
-                    if (!yi.compressToJpeg(new Rect(0, 0, w, h), 98, out)) {
-                        throw new Exception("jpeg encode failed");
-                    }
-                    out.flush();
-                }
-
-                // Then publish a second copy to the normal Pictures/MedicaMall folder.
-                try {
-                    galleryUri = publishPhotoToGallery(privateFile, name);
-                    if (galleryUri != null) publicPlace = "Pictures/MedicaMall";
-                } catch (Throwable pub) {
-                    error = pub.getMessage() == null ? pub.getClass().getSimpleName() : pub.getMessage();
-                }
+                out.flush();
+                lastSavedPhotoFile = file;
+                Uri g = null;
+                try { g = publishPhotoToGallery(file, file.getName()); } catch (Throwable ignored) { }
+                lastSavedPhotoUri = g;
+                ui.post(() -> {
+                    updateTvStatus("تم حفظ الصورة ✓ • وضع احتياطي");
+                    if (lastPhotoButton != null) lastPhotoButton.setText("الصور ✓");
+                });
             } catch (Throwable t) {
-                error = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+                ui.post(() -> updateTvStatus("فشل حفظ الصورة • " + t.getMessage()));
             }
-
-            final File finalPrivate = privateFile;
-            final Uri finalGallery = galleryUri;
-            final String finalPublicPlace = publicPlace;
-            final String finalError = error;
-            ui.post(() -> {
-                if (finalPrivate != null && finalPrivate.exists() && finalPrivate.length() > 0) {
-                    lastSavedPhotoFile = finalPrivate;
-                    lastSavedPhotoUri = finalGallery;
-                    if (finalGallery != null) {
-                        updateTvStatus("تم حفظ الصورة ✓ • " + name + " • " + finalPublicPlace);
-                    } else {
-                        updateTvStatus("تم حفظ نسخة احتياطية ✓ • " + name
-                                + (finalError == null ? "" : " • تعذر المعرض: " + finalError));
-                    }
-                    if (scopeButtonIndicator != null && !videoRecording) {
-                        scopeButtonIndicator.setText("📷 صورة محفوظة ✓");
-                        scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
-                        ui.postDelayed(MainActivity.this::resetScopeIndicator, 1500);
-                    }
-                } else {
-                    updateTvStatus("فشل حفظ الصورة"
-                            + (finalError == null ? "" : " • " + finalError));
-                    if (scopeButtonIndicator != null) {
-                        scopeButtonIndicator.setText("فشل حفظ الصورة");
-                        scopeButtonIndicator.setBackgroundColor(0xFFC62828);
-                    }
-                }
-            });
         });
     }
 
@@ -746,26 +784,55 @@ public class MainActivity extends Activity {
 
     private void openLastPhoto() {
         File file = lastSavedPhotoFile;
-        Uri uri = lastSavedPhotoUri;
-
         if (file == null || !file.exists()) {
-            updateTvStatus("لسه مفيش صورة محفوظة في الجلسة دي");
+            file = findLatestSavedPhoto();
+            if (file != null) lastSavedPhotoFile = file;
+        }
+        if (file == null || !file.exists()) {
+            updateTvStatus("لسه مفيش صورة محفوظة");
             return;
         }
 
-        try {
-            Uri viewUri = uri;
-            if (viewUri == null || "file".equalsIgnoreCase(viewUri.getScheme())) {
-                viewUri = FileProvider.getUriForFile(
-                        this, getPackageName() + ".files", file);
-            }
-            Intent i = new Intent(Intent.ACTION_VIEW);
-            i.setDataAndType(viewUri, "image/jpeg");
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(i);
-        } catch (Throwable t) {
-            updateTvStatus("الصورة محفوظة هنا: " + file.getAbsolutePath());
+        Bitmap bmp = BitmapFactory.decodeFile(file.getAbsolutePath());
+        if (bmp == null) {
+            updateTvStatus("ملف الصورة موجود لكن مش قابل للفتح");
+            return;
         }
+
+        showingPhotoReview = true;
+        if (directPreview != null) directPreview.setVisibility(View.GONE);
+        if (tvPreview != null) tvPreview.setVisibility(View.GONE);
+        if (photoReview != null) {
+            photoReview.setImageBitmap(bmp);
+            photoReview.setVisibility(View.VISIBLE);
+        }
+        updateTvStatus("آخر صورة • Back للرجوع للمنظار");
+    }
+
+    private File findLatestSavedPhoto() {
+        try {
+            File rootDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            if (rootDir == null) rootDir = new File(getFilesDir(), "Pictures");
+            File dir = new File(rootDir, "MedicaMall");
+            File[] files = dir.listFiles((d, n) -> n != null && n.toLowerCase(Locale.US).endsWith(".jpg"));
+            if (files == null || files.length == 0) return null;
+            File best = files[0];
+            for (File f : files) if (f.lastModified() > best.lastModified()) best = f;
+            return best;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private void closePhotoReview() {
+        if (!showingPhotoReview) return;
+        showingPhotoReview = false;
+        if (photoReview != null) {
+            photoReview.setImageDrawable(null);
+            photoReview.setVisibility(View.GONE);
+        }
+        if (!showWebScreen && directPreview != null) directPreview.setVisibility(View.VISIBLE);
+        updateTvStatus(camOpen ? "LIVE • " + currentQualityMode : "في انتظار المنظار");
     }
 
     private void toggleVideoRecording() {
@@ -975,78 +1042,104 @@ public class MainActivity extends Activity {
 
 
     // ================= TV / remote controls =================
+    private void attachDirectPreviewSurface() {
+        if (cam == null || !camOpen || directPreview == null || !directPreview.isAvailable()
+                || directSurfaceAttached) return;
+        try {
+            SurfaceTexture surface = directPreview.getSurfaceTexture();
+            if (surface != null) {
+                cam.addSurface(surface, false);
+                directSurfaceAttached = true;
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    private void detachDirectPreviewSurface() {
+        if (!directSurfaceAttached || cam == null || directPreview == null) {
+            directSurfaceAttached = false;
+            return;
+        }
+        try {
+            SurfaceTexture surface = directPreview.getSurfaceTexture();
+            if (surface != null) cam.removeSurface(surface);
+        } catch (Throwable ignored) { }
+        directSurfaceAttached = false;
+    }
+
+    private void updateDirectPreviewLayout() {
+        if (directPreview == null || root == null) return;
+        root.post(() -> {
+            int rw = root.getWidth();
+            int rh = root.getHeight();
+            if (rw <= 0 || rh <= 0) return;
+            int controls = dp(74);
+            int h = Math.max(dp(200), rh - controls);
+            float aspect = fh > 0 ? (fw / (float) fh) : 1f;
+            int w = Math.min(rw, Math.max(dp(200), Math.round(h * aspect)));
+            int realH = Math.min(h, Math.max(dp(200), Math.round(w / Math.max(0.01f, aspect))));
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, realH, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+            directPreview.setLayoutParams(lp);
+        });
+    }
+
     private void setupTvControls() {
         tvControls = new LinearLayout(this);
         tvControls.setOrientation(LinearLayout.HORIZONTAL);
         tvControls.setGravity(Gravity.CENTER);
-        tvControls.setPadding(dp(12), dp(8), dp(12), dp(8));
-        tvControls.setBackgroundColor(0xCC111111);
+        tvControls.setPadding(dp(10), dp(7), dp(10), dp(7));
+        tvControls.setBackgroundColor(0xE6121A22);
 
-        retryButton = makeTvButton("إعادة توصيل");
-        screenButton = makeTvButton("واجهة المرضى");
+        screenButton = makeTvButton("المرضى");
         wifiButton = makeTvButton("Wi-Fi");
-        qualityButton = makeTvButton("الجودة");
-        lastPhotoButton = makeTvButton("آخر صورة");
+        lastPhotoButton = makeTvButton("الصور");
         rotateButton = makeTvButton("تدوير");
         exitButton = makeTvButton("خروج");
 
-        retryButton.setOnClickListener(v -> reconnectScope());
         screenButton.setOnClickListener(v -> toggleScreenMode());
         wifiButton.setOnClickListener(v -> toggleWifiStream());
-        qualityButton.setOnClickListener(v -> cycleQuality());
         lastPhotoButton.setOnClickListener(v -> openLastPhoto());
         rotateButton.setOnClickListener(v -> rotatePreview());
         exitButton.setOnClickListener(v -> finish());
 
-        tvControls.addView(retryButton);
         tvControls.addView(screenButton);
         tvControls.addView(wifiButton);
-        tvControls.addView(qualityButton);
         tvControls.addView(lastPhotoButton);
         tvControls.addView(rotateButton);
         tvControls.addView(exitButton);
 
         FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM);
+                FrameLayout.LayoutParams.MATCH_PARENT, dp(74), Gravity.BOTTOM);
         root.addView(tvControls, controlsLp);
 
-        // Explicit D-pad order for cheap TV remotes.
-        retryButton.setId(View.generateViewId());
         screenButton.setId(View.generateViewId());
         wifiButton.setId(View.generateViewId());
-        qualityButton.setId(View.generateViewId());
         lastPhotoButton.setId(View.generateViewId());
         rotateButton.setId(View.generateViewId());
         exitButton.setId(View.generateViewId());
 
-        retryButton.setNextFocusRightId(screenButton.getId());
-        screenButton.setNextFocusLeftId(retryButton.getId());
         screenButton.setNextFocusRightId(wifiButton.getId());
         wifiButton.setNextFocusLeftId(screenButton.getId());
-        wifiButton.setNextFocusRightId(qualityButton.getId());
-        qualityButton.setNextFocusLeftId(wifiButton.getId());
-        qualityButton.setNextFocusRightId(lastPhotoButton.getId());
-        lastPhotoButton.setNextFocusLeftId(qualityButton.getId());
+        wifiButton.setNextFocusRightId(lastPhotoButton.getId());
+        lastPhotoButton.setNextFocusLeftId(wifiButton.getId());
         lastPhotoButton.setNextFocusRightId(rotateButton.getId());
         rotateButton.setNextFocusLeftId(lastPhotoButton.getId());
         rotateButton.setNextFocusRightId(exitButton.getId());
         exitButton.setNextFocusLeftId(rotateButton.getId());
 
-        ui.postDelayed(() -> retryButton.requestFocus(), 350);
+        ui.postDelayed(() -> screenButton.requestFocus(), 350);
     }
 
     private Button makeTvButton(String label) {
         Button b = new Button(this);
         b.setText(label);
-        b.setTextSize(18);
+        b.setTextSize(17);
         b.setAllCaps(false);
         b.setFocusable(true);
         b.setFocusableInTouchMode(true);
-        b.setMinHeight(dp(58));
-        b.setPadding(dp(18), dp(6), dp(18), dp(6));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(64), 1f);
-        lp.setMargins(dp(5), 0, dp(5), 0);
+        b.setMinHeight(dp(52));
+        b.setPadding(dp(12), dp(5), dp(12), dp(5));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(56), 1f);
+        lp.setMargins(dp(4), 0, dp(4), 0);
         b.setLayoutParams(lp);
         b.setOnFocusChangeListener((v, hasFocus) -> {
             v.setScaleX(hasFocus ? 1.06f : 1f);
@@ -1121,7 +1214,9 @@ public class MainActivity extends Activity {
     private void toggleScreenMode() {
         showWebScreen = !showWebScreen;
         web.setVisibility(showWebScreen ? View.VISIBLE : View.GONE);
-        tvPreview.setVisibility(showWebScreen ? View.GONE : View.VISIBLE);
+        tvPreview.setVisibility(View.GONE);
+        if (directPreview != null) directPreview.setVisibility(showWebScreen || showingPhotoReview ? View.GONE : View.VISIBLE);
+        if (photoReview != null) photoReview.setVisibility(showingPhotoReview ? View.VISIBLE : View.GONE);
         screenButton.setText(showWebScreen ? "صورة المنظار" : "واجهة المرضى");
 
         if (showWebScreen) {
@@ -1294,6 +1389,7 @@ public class MainActivity extends Activity {
             }
             lastFrameAt = 0;
             cam.startPreview();
+            updateDirectPreviewLayout();
 
             qualityIndex = findQualityIndex(target);
             currentQualityMode = qualityLabel(target);
@@ -1321,6 +1417,7 @@ public class MainActivity extends Activity {
                             fh = previous.height;
                         }
                         cam.startPreview();
+                        updateDirectPreviewLayout();
                         lastGoodQuality = previous;
                         qualityIndex = findQualityIndex(previous);
                         currentQualityMode = qualityLabel(previous);
@@ -1382,7 +1479,8 @@ public class MainActivity extends Activity {
 
     private void rotatePreview() {
         previewRotation = (previewRotation + 90) % 360;
-        tvPreview.setRotation(previewRotation);
+        if (directPreview != null) directPreview.setRotation(previewRotation);
+        if (tvPreview != null) tvPreview.setRotation(previewRotation);
         rotateButton.setText("تدوير " + previewRotation + "°");
     }
 
@@ -1875,6 +1973,10 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (showingPhotoReview) {
+            closePhotoReview();
+            return;
+        }
         if (customView != null) {
             chrome.onHideCustomView();
             return;
@@ -1912,6 +2014,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        detachDirectPreviewSurface();
         stopWifiStream();
         camOpen = false;
         if (pendingSingleScopePress != null) ui.removeCallbacks(pendingSingleScopePress);
