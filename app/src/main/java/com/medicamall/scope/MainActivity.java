@@ -675,7 +675,7 @@ public class MainActivity extends Activity {
                     if (scopeButtonIndicator != null && !videoRecording) {
                         scopeButtonIndicator.setText("📷 صورة محفوظة ✓");
                         scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
-                        ui.postDelayed(this::resetScopeIndicator, 1500);
+                        ui.postDelayed(MainActivity.this::resetScopeIndicator, 1500);
                     }
                 } else {
                     updateTvStatus("فشل حفظ الصورة"
@@ -845,7 +845,7 @@ public class MainActivity extends Activity {
                             if (scopeButtonIndicator != null) {
                                 scopeButtonIndicator.setText("🎥 فيديو محفوظ ✓");
                                 scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
-                                ui.postDelayed(this::resetScopeIndicator, 1600);
+                                ui.postDelayed(MainActivity.this::resetScopeIndicator, 1600);
                             }
                         });
                     });
