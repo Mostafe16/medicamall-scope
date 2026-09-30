@@ -96,6 +96,8 @@ public class MainActivity extends Activity {
     // ---- TV / remote UI ----
     private ImageView tvPreview;
     private TextView tvStatus;
+    private TextView scopeButtonIndicator;
+    private int scopeButtonCount = 0;
     private LinearLayout tvControls;
     private Button retryButton;
     private Button screenButton;
@@ -172,6 +174,19 @@ public class MainActivity extends Activity {
                 Gravity.TOP | Gravity.START);
         statusLp.setMargins(dp(14), dp(14), dp(14), dp(14));
         root.addView(tvStatus, statusLp);
+
+        scopeButtonIndicator = new TextView(this);
+        scopeButtonIndicator.setText("زرار المنظار: 0");
+        scopeButtonIndicator.setTextColor(Color.WHITE);
+        scopeButtonIndicator.setTextSize(20);
+        scopeButtonIndicator.setGravity(Gravity.CENTER);
+        scopeButtonIndicator.setPadding(dp(18), dp(10), dp(18), dp(10));
+        scopeButtonIndicator.setBackgroundColor(0xCC116EB5);
+        FrameLayout.LayoutParams buttonIndicatorLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.END);
+        buttonIndicatorLp.setMargins(dp(14), dp(14), dp(14), dp(14));
+        root.addView(scopeButtonIndicator, buttonIndicatorLp);
 
         setupTvControls();
         setContentView(root);
@@ -475,6 +490,28 @@ public class MainActivity extends Activity {
         long now = SystemClock.uptimeMillis();
         if (now - lastButton < 150) return; // debounce
         lastButton = now;
+        scopeButtonCount++;
+        final int count = scopeButtonCount;
+        ui.post(() -> {
+            if (scopeButtonIndicator != null) {
+                scopeButtonIndicator.setText("زرار المنظار: " + count + " ✓");
+                scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
+                scopeButtonIndicator.animate()
+                        .scaleX(1.18f).scaleY(1.18f)
+                        .setDuration(80)
+                        .withEndAction(() -> scopeButtonIndicator.animate()
+                                .scaleX(1f).scaleY(1f).setDuration(120).start())
+                        .start();
+                ui.postDelayed(() -> {
+                    if (scopeButtonIndicator != null) {
+                        scopeButtonIndicator.setBackgroundColor(0xCC116EB5);
+                    }
+                }, 700);
+            }
+            if (tvStatus != null) {
+                tvStatus.setText("TV TEST • تم ضغط زرار المنظار • Press #" + count);
+            }
+        });
         js("button");
     }
 
@@ -674,6 +711,8 @@ public class MainActivity extends Activity {
             seq = 0;
             served = 0;
         }
+        scopeButtonCount = 0;
+        if (scopeButtonIndicator != null) scopeButtonIndicator.setText("زرار المنظار: 0");
         clearTvPreview();
         if (cam != null) {
             try { cam.release(); } catch (Throwable ignored) { }
