@@ -116,8 +116,11 @@ public class MainActivity extends Activity {
     private Button screenButton;
     private Button wifiButton;
     private Button qualityButton;
+    private Button lastPhotoButton;
     private Button rotateButton;
     private Button exitButton;
+    private File lastSavedPhotoFile;
+    private Uri lastSavedPhotoUri;
     private final List<Size> qualitySizes = new ArrayList<>();
     private int qualityIndex = -1;
     private Size lastGoodQuality = null;
@@ -611,45 +614,151 @@ public class MainActivity extends Activity {
         }
 
         flashCapture();
+        updateTvStatus("جاري حفظ الصورة...");
         previewExec.execute(() -> {
-            Uri saved = null;
+            String name = "Scope_" + fileStamp() + ".jpg";
+            File privateFile = null;
+            Uri galleryUri = null;
+            String publicPlace = null;
+            String error = null;
+
             try {
-                String name = "Scope_" + fileStamp() + ".jpg";
-                ContentValues cv = new ContentValues();
-                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
-                cv.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg");
-                if (Build.VERSION.SDK_INT >= 29) {
-                    cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                            Environment.DIRECTORY_PICTURES + "/MedicaMall");
+                // First create a guaranteed fallback copy in app-owned external storage.
+                // This survives MediaStore quirks on cheap TV-box firmware.
+                File rootDir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+                if (rootDir == null) rootDir = new File(getFilesDir(), "Pictures");
+                File dir = new File(rootDir, "MedicaMall");
+                if (!dir.exists() && !dir.mkdirs() && !dir.isDirectory()) {
+                    throw new Exception("can't create backup folder");
                 }
-                Uri uri = getContentResolver().insert(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
-                if (uri == null) throw new Exception("MediaStore insert failed");
-                try (OutputStream out = getContentResolver().openOutputStream(uri)) {
-                    if (out == null) throw new Exception("output stream failed");
+                privateFile = new File(dir, name);
+                try (OutputStream out = new FileOutputStream(privateFile)) {
                     YuvImage yi = new YuvImage(copy, ImageFormat.NV21, w, h, null);
-                    if (!yi.compressToJpeg(new Rect(0, 0, w, h), 97, out)) {
+                    if (!yi.compressToJpeg(new Rect(0, 0, w, h), 98, out)) {
                         throw new Exception("jpeg encode failed");
                     }
+                    out.flush();
                 }
-                saved = uri;
+
+                // Then publish a second copy to the normal Pictures/MedicaMall folder.
+                try {
+                    galleryUri = publishPhotoToGallery(privateFile, name);
+                    if (galleryUri != null) publicPlace = "Pictures/MedicaMall";
+                } catch (Throwable pub) {
+                    error = pub.getMessage() == null ? pub.getClass().getSimpleName() : pub.getMessage();
+                }
             } catch (Throwable t) {
-                final String msg = t.getMessage() == null ? "unknown" : t.getMessage();
-                ui.post(() -> updateTvStatus("خطأ في حفظ الصورة • " + msg));
+                error = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
             }
 
-            final Uri result = saved;
-            if (result != null) {
-                ui.post(() -> {
-                    updateTvStatus("تم حفظ الصورة ✓ • " + fw + "×" + fh);
+            final File finalPrivate = privateFile;
+            final Uri finalGallery = galleryUri;
+            final String finalPublicPlace = publicPlace;
+            final String finalError = error;
+            ui.post(() -> {
+                if (finalPrivate != null && finalPrivate.exists() && finalPrivate.length() > 0) {
+                    lastSavedPhotoFile = finalPrivate;
+                    lastSavedPhotoUri = finalGallery;
+                    if (finalGallery != null) {
+                        updateTvStatus("تم حفظ الصورة ✓ • " + name + " • " + finalPublicPlace);
+                    } else {
+                        updateTvStatus("تم حفظ نسخة احتياطية ✓ • " + name
+                                + (finalError == null ? "" : " • تعذر المعرض: " + finalError));
+                    }
                     if (scopeButtonIndicator != null && !videoRecording) {
                         scopeButtonIndicator.setText("📷 صورة محفوظة ✓");
                         scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
-                        ui.postDelayed(() -> resetScopeIndicator(), 1200);
+                        ui.postDelayed(this::resetScopeIndicator, 1500);
                     }
-                });
-            }
+                } else {
+                    updateTvStatus("فشل حفظ الصورة"
+                            + (finalError == null ? "" : " • " + finalError));
+                    if (scopeButtonIndicator != null) {
+                        scopeButtonIndicator.setText("فشل حفظ الصورة");
+                        scopeButtonIndicator.setBackgroundColor(0xFFC62828);
+                    }
+                }
+            });
         });
+    }
+
+    private Uri publishPhotoToGallery(File source, String name) throws Exception {
+        if (Build.VERSION.SDK_INT >= 29) {
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+            cv.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg");
+            cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                    Environment.DIRECTORY_PICTURES + "/MedicaMall");
+            cv.put(MediaStore.MediaColumns.IS_PENDING, 1);
+
+            Uri uri = getContentResolver().insert(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+            if (uri == null) throw new Exception("MediaStore insert failed");
+
+            boolean ok = false;
+            try (InputStream in = new FileInputStream(source);
+                 OutputStream out = getContentResolver().openOutputStream(uri, "w")) {
+                if (out == null) throw new Exception("MediaStore output failed");
+                copy(in, out);
+                out.flush();
+                ok = true;
+            } finally {
+                if (!ok) {
+                    try { getContentResolver().delete(uri, null, null); } catch (Throwable ignored) { }
+                }
+            }
+
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            getContentResolver().update(uri, done, null, null);
+            return uri;
+        }
+
+        if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException("Storage permission not granted");
+        }
+
+        File dir = new File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
+                "MedicaMall");
+        if (!dir.exists() && !dir.mkdirs() && !dir.isDirectory()) {
+            throw new Exception("can't create Pictures/MedicaMall");
+        }
+        File dst = new File(dir, name);
+        try (InputStream in = new FileInputStream(source);
+             OutputStream out = new FileOutputStream(dst)) {
+            copy(in, out);
+            out.flush();
+        }
+        MediaScannerConnection.scanFile(this,
+                new String[]{dst.getAbsolutePath()},
+                new String[]{"image/jpeg"}, null);
+        return Uri.fromFile(dst);
+    }
+
+    private void openLastPhoto() {
+        File file = lastSavedPhotoFile;
+        Uri uri = lastSavedPhotoUri;
+
+        if (file == null || !file.exists()) {
+            updateTvStatus("لسه مفيش صورة محفوظة في الجلسة دي");
+            return;
+        }
+
+        try {
+            Uri viewUri = uri;
+            if (viewUri == null || "file".equalsIgnoreCase(viewUri.getScheme())) {
+                viewUri = FileProvider.getUriForFile(
+                        this, getPackageName() + ".files", file);
+            }
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(viewUri, "image/jpeg");
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(i);
+        } catch (Throwable t) {
+            updateTvStatus("الصورة محفوظة هنا: " + file.getAbsolutePath());
+        }
     }
 
     private void toggleVideoRecording() {
@@ -850,6 +959,7 @@ public class MainActivity extends Activity {
         screenButton = makeTvButton("واجهة المرضى");
         wifiButton = makeTvButton("Wi-Fi");
         qualityButton = makeTvButton("الجودة");
+        lastPhotoButton = makeTvButton("آخر صورة");
         rotateButton = makeTvButton("تدوير");
         exitButton = makeTvButton("خروج");
 
@@ -857,6 +967,7 @@ public class MainActivity extends Activity {
         screenButton.setOnClickListener(v -> toggleScreenMode());
         wifiButton.setOnClickListener(v -> toggleWifiStream());
         qualityButton.setOnClickListener(v -> cycleQuality());
+        lastPhotoButton.setOnClickListener(v -> openLastPhoto());
         rotateButton.setOnClickListener(v -> rotatePreview());
         exitButton.setOnClickListener(v -> finish());
 
@@ -864,6 +975,7 @@ public class MainActivity extends Activity {
         tvControls.addView(screenButton);
         tvControls.addView(wifiButton);
         tvControls.addView(qualityButton);
+        tvControls.addView(lastPhotoButton);
         tvControls.addView(rotateButton);
         tvControls.addView(exitButton);
 
@@ -877,6 +989,7 @@ public class MainActivity extends Activity {
         screenButton.setId(View.generateViewId());
         wifiButton.setId(View.generateViewId());
         qualityButton.setId(View.generateViewId());
+        lastPhotoButton.setId(View.generateViewId());
         rotateButton.setId(View.generateViewId());
         exitButton.setId(View.generateViewId());
 
@@ -886,8 +999,10 @@ public class MainActivity extends Activity {
         wifiButton.setNextFocusLeftId(screenButton.getId());
         wifiButton.setNextFocusRightId(qualityButton.getId());
         qualityButton.setNextFocusLeftId(wifiButton.getId());
-        qualityButton.setNextFocusRightId(rotateButton.getId());
-        rotateButton.setNextFocusLeftId(qualityButton.getId());
+        qualityButton.setNextFocusRightId(lastPhotoButton.getId());
+        lastPhotoButton.setNextFocusLeftId(qualityButton.getId());
+        lastPhotoButton.setNextFocusRightId(rotateButton.getId());
+        rotateButton.setNextFocusLeftId(lastPhotoButton.getId());
         rotateButton.setNextFocusRightId(exitButton.getId());
         exitButton.setNextFocusLeftId(rotateButton.getId());
 
