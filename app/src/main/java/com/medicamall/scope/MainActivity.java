@@ -82,6 +82,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -144,6 +145,18 @@ public class MainActivity extends Activity {
     private WifiStreamServer wifiServer;
     private byte[] wifiJpeg;
     private long lastWifiEncode = 0;
+
+    private final Map<String, NativeSessionFile> nativeSessionFiles =
+            Collections.synchronizedMap(new HashMap<>());
+
+    private static final class NativeSessionFile {
+        final File file;
+        final String mime;
+        NativeSessionFile(File file, String mime) {
+            this.file = file;
+            this.mime = mime;
+        }
+    }
 
     // ---- UVC camera ----
     private ICameraHelper cam;
@@ -257,6 +270,10 @@ public class MainActivity extends Activity {
                 Uri u = r.getUrl();
                 if (HOST.equals(u.getHost()) && u.getPath() != null && u.getPath().startsWith("/uvc/")) {
                     return frameResponse();
+                }
+                if (HOST.equals(u.getHost()) && u.getPath() != null
+                        && u.getPath().startsWith("/native-media/")) {
+                    return nativeSessionMediaResponse(u);
                 }
                 if (HOST.equals(u.getHost()) && "/assets/index.html".equals(u.getPath())) {
                     File wf = Updates.webFile(MainActivity.this);
@@ -576,8 +593,6 @@ public class MainActivity extends Activity {
         long now = SystemClock.uptimeMillis();
         if (now - lastButton < 150) return; // hardware debounce
         lastButton = now;
-        // Keep the patient-session media logic in sync with the native TV capture.
-        js("button");
         ui.post(this::handleScopePressOnUi);
     }
 
@@ -657,7 +672,8 @@ public class MainActivity extends Activity {
                 if (file.exists() && file.length() > 0) {
                     lastSavedPhotoFile = file;
                     lastSavedPhotoUri = published;
-                    updateTvStatus("تم حفظ الصورة ✓");
+                    importNativeMediaIntoSession(file, "image/jpeg", "photo", "jpg", 0);
+                    updateTvStatus("تم حفظ الصورة وربطها بالجلسة ✓");
                     if (lastPhotoButton != null) lastPhotoButton.setText("الصور ✓");
                 } else {
                     updateTvStatus("فشل حفظ الصورة • " + String.valueOf(error));
@@ -815,6 +831,10 @@ public class MainActivity extends Activity {
                     }
 
                     lastSavedVideoFile = savedFile;
+                    final int sessionDur = (int) Math.max(1,
+                            Math.round((SystemClock.uptimeMillis() - videoStartedAt) / 1000.0));
+                    importNativeMediaIntoSession(
+                            savedFile, "video/mp4", "video", "mp4", sessionDur);
                     previewExec.execute(() -> {
                         Uri gallery = null;
                         String err = null;
@@ -1398,6 +1418,69 @@ public class MainActivity extends Activity {
         qualityGeneration++;
         initCam();
         ui.postDelayed(this::openFirstUvc, 500);
+    }
+
+    // ================= native capture -> patient session =================
+    private void importNativeMediaIntoSession(
+            File file, String mime, String type, String ext, int durationSeconds) {
+        if (file == null || !file.exists() || file.length() <= 0 || web == null) return;
+
+        String token = UUID.randomUUID().toString().replace("-", "");
+        nativeSessionFiles.put(token, new NativeSessionFile(file, mime));
+
+        synchronized (nativeSessionFiles) {
+            while (nativeSessionFiles.size() > 12) {
+                String first = nativeSessionFiles.keySet().iterator().next();
+                nativeSessionFiles.remove(first);
+            }
+        }
+
+        String url = ORIGIN + "/native-media/" + token;
+        String script = "(function(){"
+                + "var x={url:" + jsQuote(url)
+                + ",type:" + jsQuote(type)
+                + ",ext:" + jsQuote(ext)
+                + ",dur:" + Math.max(0, durationSeconds) + "};"
+                + "if(window.__mmImportNativeMedia){window.__mmImportNativeMedia(x);}"
+                + "else{(window.__mmPendingNativeMedia=window.__mmPendingNativeMedia||[]).push(x);}"
+                + "})()";
+        ui.post(() -> web.evaluateJavascript(script, null));
+    }
+
+    private WebResourceResponse nativeSessionMediaResponse(Uri uri) {
+        String path = uri == null ? null : uri.getPath();
+        if (path == null) return notFoundResponse();
+        String token = path.substring(path.lastIndexOf('/') + 1);
+        NativeSessionFile entry = nativeSessionFiles.get(token);
+        if (entry == null || entry.file == null || !entry.file.exists()) {
+            return notFoundResponse();
+        }
+
+        try {
+            Map<String, String> hd = new HashMap<>();
+            hd.put("Cache-Control", "no-store");
+            hd.put("Content-Length", String.valueOf(entry.file.length()));
+            return new WebResourceResponse(
+                    entry.mime, null, 200, "OK", hd, new FileInputStream(entry.file));
+        } catch (Throwable ignored) {
+            return notFoundResponse();
+        }
+    }
+
+    private WebResourceResponse notFoundResponse() {
+        return new WebResourceResponse(
+                "text/plain", "utf-8", 404, "Not Found",
+                Collections.singletonMap("Cache-Control", "no-store"),
+                new ByteArrayInputStream("not found".getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static String jsQuote(String value) {
+        if (value == null) return "null";
+        String x = value.replace("\\", "\\\\")
+                .replace(""", "\\"")
+                .replace("\r", "\\r")
+                .replace("\n", "\\n");
+        return """ + x + """;
     }
 
     // ================= Wi-Fi live view =================
