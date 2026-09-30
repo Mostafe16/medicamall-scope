@@ -458,7 +458,7 @@ public class MainActivity extends Activity {
                 // The device is now fully opened; this is the reliable point to ask it
                 // for every UVC mode. If a higher mode exists, try one step above the
                 // default 400x400 automatically, with watchdog fallback.
-                ui.postDelayed(this::tryOneHigherQualityAutomatically, 700);
+                ui.postDelayed(MainActivity.this::tryOneHigherQualityAutomatically, 700);
 
                 try {
                     VideoCaptureConfig vc = cam.getVideoCaptureConfig();
