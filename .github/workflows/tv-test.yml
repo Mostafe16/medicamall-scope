@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: tv-box-test-apk
+  group: tv-box-test-apk-v2
   cancel-in-progress: true
 
 jobs:
