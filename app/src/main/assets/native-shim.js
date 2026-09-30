@@ -113,6 +113,195 @@
     try { md && md.dispatchEvent(new Event('devicechange')); } catch (e) {}
   };
 
+
+  /* ---------------- Android TV / D-pad adaptation ---------------- */
+  var installTvMode = function () {
+    if (!document.body || document.documentElement.getAttribute('data-mm-tv') === '1') return;
+    document.documentElement.setAttribute('data-mm-tv', '1');
+
+    var css = document.createElement('style');
+    css.id = 'mmTvCss';
+    css.textContent =
+      ':focus{outline:4px solid #ffc233!important;outline-offset:3px!important;box-shadow:0 0 0 3px rgba(17,110,181,.35)!important}' +
+      'button,a[href],select,input,textarea,[role="button"],[onclick]{scroll-margin:110px}' +
+      '.mm-tv-stepper{display:inline-flex;align-items:center;gap:8px;margin:7px 8px;vertical-align:middle;direction:ltr}' +
+      '.mm-tv-step-btn{width:54px!important;height:50px!important;min-width:54px!important;min-height:50px!important;padding:0!important;border:0!important;border-radius:12px!important;background:#116eb5!important;color:#fff!important;font-size:28px!important;font-weight:900!important;line-height:1!important}' +
+      '.mm-tv-step-val{min-width:76px;padding:10px 12px;border:2px solid #d9e5ef;border-radius:10px;background:#fff;color:#16324a;text-align:center;font:700 17px/1.2 system-ui,sans-serif}' +
+      'input[type="range"]{min-width:180px}' +
+      '@media (min-width:900px){button,select,input[type="button"],input[type="submit"]{min-height:46px}}';
+    document.head.appendChild(css);
+
+    var fire = function (el, type) {
+      try { el.dispatchEvent(new Event(type, { bubbles:true })); } catch (e) {}
+    };
+
+    var updateStepper = function (input) {
+      var id = input.getAttribute('data-mm-tv-step-id');
+      if (!id) return;
+      var out = document.querySelector('[data-mm-tv-step-val="' + id + '"]');
+      if (out) out.textContent = input.value;
+    };
+
+    var stepValue = function (input, dir) {
+      try {
+        if (dir > 0 && input.stepUp) input.stepUp();
+        else if (dir < 0 && input.stepDown) input.stepDown();
+        else throw new Error('no step api');
+      } catch (e) {
+        var cur = parseFloat(input.value || '0');
+        var step = parseFloat(input.step || '');
+        if (!isFinite(step) || step === 0) step = input.type === 'range' ? 1 : 1;
+        var next = cur + (dir * step);
+        var min = parseFloat(input.min || ''), max = parseFloat(input.max || '');
+        if (isFinite(min)) next = Math.max(min, next);
+        if (isFinite(max)) next = Math.min(max, next);
+        input.value = String(next);
+      }
+      fire(input, 'input');
+      fire(input, 'change');
+      updateStepper(input);
+    };
+
+    var addStepper = function (input) {
+      if (!input || input.disabled || input.readOnly || input.getAttribute('data-mm-tv-step-id')) return;
+      if (input.type !== 'range' && input.type !== 'number') return;
+      var id = 'mmstep' + Math.random().toString(36).slice(2, 9);
+      input.setAttribute('data-mm-tv-step-id', id);
+
+      var wrap = document.createElement('span');
+      wrap.className = 'mm-tv-stepper';
+      wrap.setAttribute('data-mm-tv-stepper', id);
+
+      var minus = document.createElement('button');
+      minus.type = 'button';
+      minus.className = 'mm-tv-step-btn';
+      minus.textContent = '−';
+      minus.setAttribute('aria-label', 'تقليل القيمة');
+      minus.onclick = function (e) { e.preventDefault(); stepValue(input, -1); };
+
+      var val = document.createElement('span');
+      val.className = 'mm-tv-step-val';
+      val.setAttribute('data-mm-tv-step-val', id);
+      val.textContent = input.value;
+
+      var plus = document.createElement('button');
+      plus.type = 'button';
+      plus.className = 'mm-tv-step-btn';
+      plus.textContent = '+';
+      plus.setAttribute('aria-label', 'زيادة القيمة');
+      plus.onclick = function (e) { e.preventDefault(); stepValue(input, 1); };
+
+      wrap.appendChild(minus);
+      wrap.appendChild(val);
+      wrap.appendChild(plus);
+      if (input.parentNode) input.parentNode.insertBefore(wrap, input.nextSibling);
+      input.addEventListener('input', function () { updateStepper(input); });
+      input.addEventListener('change', function () { updateStepper(input); });
+    };
+
+    var makeFocusable = function (root) {
+      root = root && root.querySelectorAll ? root : document;
+      var q = 'button,a[href],input,select,textarea,[role="button"],[onclick]';
+      Array.prototype.forEach.call(root.querySelectorAll(q), function (el) {
+        if (el.disabled || el.getAttribute('aria-hidden') === 'true') return;
+        if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
+      });
+      Array.prototype.forEach.call(root.querySelectorAll('input[type="range"],input[type="number"]'), addStepper);
+    };
+
+    var visibleFocusables = function () {
+      var q = 'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[role="button"],[onclick]';
+      return Array.prototype.filter.call(document.querySelectorAll(q), function (el) {
+        var r = el.getBoundingClientRect();
+        var st = getComputedStyle(el);
+        return r.width > 4 && r.height > 4 && st.display !== 'none' && st.visibility !== 'hidden';
+      });
+    };
+
+    var center = function (el) {
+      var r = el.getBoundingClientRect();
+      return { x:r.left + r.width/2, y:r.top + r.height/2 };
+    };
+
+    var spatialMove = function (key) {
+      var items = visibleFocusables();
+      if (!items.length) return false;
+      var cur = document.activeElement;
+      if (items.indexOf(cur) < 0) {
+        items[0].focus();
+        try { items[0].scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+        return true;
+      }
+      var c = center(cur), best = null, bestScore = 1e12;
+      items.forEach(function (el) {
+        if (el === cur) return;
+        var p = center(el), dx = p.x - c.x, dy = p.y - c.y;
+        var main, cross;
+        if (key === 'ArrowRight') { if (dx <= 6) return; main = dx; cross = Math.abs(dy); }
+        else if (key === 'ArrowLeft') { if (dx >= -6) return; main = -dx; cross = Math.abs(dy); }
+        else if (key === 'ArrowDown') { if (dy <= 6) return; main = dy; cross = Math.abs(dx); }
+        else { if (dy >= -6) return; main = -dy; cross = Math.abs(dx); }
+        var score = main + cross * 2.2;
+        if (score < bestScore) { bestScore = score; best = el; }
+      });
+      if (!best) return false;
+      best.focus();
+      try { best.scrollIntoView({block:'center', inline:'nearest', behavior:'smooth'}); } catch (e) {}
+      return true;
+    };
+
+    document.addEventListener('keydown', function (e) {
+      var el = document.activeElement;
+      if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') &&
+          el && (el.type === 'range' || el.type === 'number')) {
+        e.preventDefault();
+        stepValue(el, e.key === 'ArrowRight' ? 1 : -1);
+        return;
+      }
+      if (e.key === 'Enter' && el && el.matches &&
+          el.matches('[role="button"],[onclick]') && el.tagName !== 'BUTTON' && el.tagName !== 'A') {
+        e.preventDefault();
+        try { el.click(); } catch (x) {}
+        return;
+      }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown' ||
+          e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        if (el && el.tagName === 'SELECT' && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) return;
+        if (el && (el.type === 'text' || el.tagName === 'TEXTAREA') &&
+            (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
+        if (spatialMove(e.key)) e.preventDefault();
+      }
+    }, true);
+
+    makeFocusable(document);
+    var mo = new MutationObserver(function (muts) {
+      muts.forEach(function (m) {
+        Array.prototype.forEach.call(m.addedNodes || [], function (n) {
+          if (n && n.nodeType === 1) {
+            if (n.matches && n.matches('input[type="range"],input[type="number"]')) addStepper(n);
+            makeFocusable(n);
+          }
+        });
+      });
+    });
+    mo.observe(document.body, { childList:true, subtree:true });
+
+    window.__mmTvFocusFirst = function () {
+      makeFocusable(document);
+      var items = visibleFocusables();
+      if (items.length) {
+        items[0].focus();
+        try { items[0].scrollIntoView({block:'center', inline:'nearest'}); } catch (e) {}
+      }
+    };
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', installTvMode, { once:true });
+  } else {
+    installTvMode();
+  }
+
   /* ---------------- files: save / share ---------------- */
   var b64of = function (blob) {
     return new Promise(function (res, rej) {
