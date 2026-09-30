@@ -109,6 +109,8 @@ public class MainActivity extends Activity {
     private boolean videoRecording = false;
     private boolean videoTransition = false;
     private long videoStartedAt = 0;
+    private File activeVideoFile;
+    private File lastSavedVideoFile;
     private Runnable recordingTicker;
     private View captureFlash;
     private LinearLayout tvControls;
@@ -781,26 +783,16 @@ public class MainActivity extends Activity {
 
         try {
             String name = "Scope_" + fileStamp() + ".mp4";
-            VideoCapture.OutputFileOptions options;
-
-            if (Build.VERSION.SDK_INT >= 29) {
-                ContentValues cv = new ContentValues();
-                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
-                cv.put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4");
-                cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                        Environment.DIRECTORY_MOVIES + "/MedicaMall");
-                options = new VideoCapture.OutputFileOptions.Builder(
-                        getContentResolver(),
-                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                        cv).build();
-            } else {
-                File dir = new File(
-                        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-                        "MedicaMall");
-                dir.mkdirs();
-                options = new VideoCapture.OutputFileOptions.Builder(
-                        new File(dir, name)).build();
+            File rootDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES);
+            if (rootDir == null) rootDir = new File(getFilesDir(), "Movies");
+            File dir = new File(rootDir, "MedicaMall");
+            if (!dir.exists() && !dir.mkdirs() && !dir.isDirectory()) {
+                throw new Exception("can't create video folder");
             }
+
+            activeVideoFile = new File(dir, name);
+            VideoCapture.OutputFileOptions options =
+                    new VideoCapture.OutputFileOptions.Builder(activeVideoFile).build();
 
             cam.startRecording(options, new VideoCapture.OnVideoCaptureCallback() {
                 @Override
@@ -816,26 +808,55 @@ public class MainActivity extends Activity {
 
                 @Override
                 public void onVideoSaved(VideoCapture.OutputFileResults outputFileResults) {
-                    ui.post(() -> {
-                        videoTransition = false;
-                        videoRecording = false;
-                        stopRecordingTicker();
-                        updateTvStatus("تم حفظ الفيديو ✓ • Movies/MedicaMall");
-                        if (scopeButtonIndicator != null) {
-                            scopeButtonIndicator.setText("🎥 فيديو محفوظ ✓");
-                            scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
-                            ui.postDelayed(() -> resetScopeIndicator(), 1600);
+                    final File savedFile = activeVideoFile;
+                    activeVideoFile = null;
+                    videoTransition = false;
+                    videoRecording = false;
+                    stopRecordingTicker();
+
+                    if (savedFile == null || !savedFile.exists() || savedFile.length() == 0) {
+                        ui.post(() -> updateTvStatus("التسجيل توقف لكن ملف الفيديو غير موجود"));
+                        return;
+                    }
+
+                    lastSavedVideoFile = savedFile;
+                    previewExec.execute(() -> {
+                        Uri gallery = null;
+                        String err = null;
+                        try {
+                            gallery = saveToGallery(savedFile, "video/mp4");
+                        } catch (Throwable t) {
+                            err = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
                         }
+                        final Uri g = gallery;
+                        final String e = err;
+                        ui.post(() -> {
+                            if (g != null) {
+                                updateTvStatus("تم حفظ الفيديو ✓ • Movies/MedicaMall");
+                            } else {
+                                updateTvStatus("تم حفظ نسخة الفيديو الاحتياطية ✓"
+                                        + (e == null ? "" : " • تعذر المعرض: " + e));
+                            }
+                            if (scopeButtonIndicator != null) {
+                                scopeButtonIndicator.setText("🎥 فيديو محفوظ ✓");
+                                scopeButtonIndicator.setBackgroundColor(0xFF1B8F3A);
+                                ui.postDelayed(this::resetScopeIndicator, 1600);
+                            }
+                        });
                     });
                 }
 
                 @Override
                 public void onError(int videoCaptureError, String message, Throwable cause) {
+                    final File failedFile = activeVideoFile;
+                    activeVideoFile = null;
                     ui.post(() -> {
                         videoTransition = false;
                         videoRecording = false;
                         stopRecordingTicker();
-                        updateTvStatus("خطأ في تسجيل الفيديو • " + message);
+                        String suffix = failedFile != null && failedFile.exists() && failedFile.length() > 0
+                                ? " • يوجد ملف جزئي احتياطي" : "";
+                        updateTvStatus("خطأ في تسجيل الفيديو • " + message + suffix);
                         if (scopeButtonIndicator != null) {
                             scopeButtonIndicator.setText("خطأ تسجيل");
                             scopeButtonIndicator.setBackgroundColor(0xFFC62828);
@@ -844,6 +865,7 @@ public class MainActivity extends Activity {
                 }
             });
         } catch (Throwable t) {
+            activeVideoFile = null;
             videoTransition = false;
             videoRecording = false;
             updateTvStatus("تعذر بدء التسجيل • " + t.getMessage());
