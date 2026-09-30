@@ -8,6 +8,8 @@ import android.content.ClipboardManager;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
@@ -28,6 +30,7 @@ import android.print.PrintManager;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -41,6 +44,9 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.core.content.FileProvider;
@@ -70,6 +76,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends Activity {
 
@@ -80,9 +89,29 @@ public class MainActivity extends Activity {
     static final int WIFI_PORT = 8080;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
+    private FrameLayout root;
     private WebView web;
     private WebViewAssetLoader assets;
+
+    // ---- TV / remote UI ----
+    private ImageView tvPreview;
+    private TextView tvStatus;
+    private LinearLayout tvControls;
+    private Button retryButton;
+    private Button screenButton;
     private Button wifiButton;
+    private Button rotateButton;
+    private Button exitButton;
+    private boolean showWebScreen = false;
+    private int previewRotation = 0;
+    private Bitmap lastTvBitmap;
+    private final ExecutorService previewExec = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean previewBusy = new AtomicBoolean(false);
+    private long lastPreviewQueued = 0;
+    private long fpsWindowStart = 0;
+    private long fpsFrames = 0;
+    private float lastFps = 0f;
+
     private WifiStreamServer wifiServer;
     private byte[] wifiJpeg;
     private long lastWifiEncode = 0;
@@ -115,24 +144,36 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         WebView.setWebContentsDebuggingEnabled(true);
 
-        FrameLayout root = new FrameLayout(this);
+        root = new FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
+
         web = new WebView(this);
         web.setBackgroundColor(Color.WHITE);
+        web.setFocusable(false);
+        web.setFocusableInTouchMode(false);
+        web.setVisibility(View.GONE);
         root.addView(web, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        wifiButton = new Button(this);
-        wifiButton.setAllCaps(false);
-        wifiButton.setText("Wi-Fi View");
-        wifiButton.setTextSize(12);
-        FrameLayout.LayoutParams wifiLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.END);
-        int margin = dp(14);
-        wifiLp.setMargins(margin, margin, margin, margin);
-        root.addView(wifiButton, wifiLp);
-        wifiButton.setOnClickListener(v -> toggleWifiStream());
+        tvPreview = new ImageView(this);
+        tvPreview.setBackgroundColor(Color.BLACK);
+        tvPreview.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        root.addView(tvPreview, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
+        tvStatus = new TextView(this);
+        tvStatus.setText("TV TEST • في انتظار المنظار");
+        tvStatus.setTextColor(Color.WHITE);
+        tvStatus.setTextSize(18);
+        tvStatus.setPadding(dp(16), dp(10), dp(16), dp(10));
+        tvStatus.setBackgroundColor(0xAA000000);
+        FrameLayout.LayoutParams statusLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.START);
+        statusLp.setMargins(dp(14), dp(14), dp(14), dp(14));
+        root.addView(tvStatus, statusLp);
+
+        setupTvControls();
         setContentView(root);
 
         WebSettings s = web.getSettings();
@@ -286,18 +327,27 @@ public class MainActivity extends Activity {
         List<Size> list = null;
         try { list = cam.getSupportedSizeList(); } catch (Throwable ignored) { }
         if (list == null || list.isEmpty()) return null;
-        Size best = null;
-        for (Size z : list) {                     // largest MJPEG up to 1080p
-            if (!isMjpeg(z) || z.width * z.height > 1920 * 1080) continue;
-            if (best == null || z.width * z.height > best.width * best.height) best = z;
-        }
-        if (best == null) {
-            for (Size z : list) {                 // otherwise largest up to 720p
-                if (z.width * z.height > 1280 * 720) continue;
-                if (best == null || z.width * z.height > best.width * best.height) best = z;
+
+        // TV-box test: start conservatively. Cheap Android boxes can enumerate 1080p
+        // correctly but fail to deliver stable converted frames at that size.
+        Size mjpeg640 = null, mjpeg720 = null, smallestMjpeg = null, fallback = null;
+        for (Size z : list) {
+            if (isMjpeg(z)) {
+                if (z.width == 640 && z.height == 480) mjpeg640 = z;
+                if (z.width == 1280 && z.height == 720) mjpeg720 = z;
+                if (smallestMjpeg == null || z.width * z.height < smallestMjpeg.width * smallestMjpeg.height) {
+                    smallestMjpeg = z;
+                }
+            }
+            if (z.width * z.height <= 1280 * 720
+                    && (fallback == null || z.width * z.height < fallback.width * fallback.height)) {
+                fallback = z;
             }
         }
-        return best;
+        if (mjpeg640 != null) return mjpeg640;
+        if (mjpeg720 != null) return mjpeg720;
+        if (smallestMjpeg != null) return smallestMjpeg;
+        return fallback;
     }
 
     private void initCam() {
@@ -306,11 +356,13 @@ public class MainActivity extends Activity {
         cam.setStateCallback(new ICameraHelper.StateCallback() {
             @Override
             public void onAttach(UsbDevice device) {
+                updateTvStatus("تم اكتشاف USB للمنظار • جاري طلب الاتصال");
                 if (!camOpen && isUvc(device)) cam.selectDevice(device);
             }
 
             @Override
             public void onDeviceOpen(UsbDevice device, boolean isFirstOpen) {
+                updateTvStatus("تم السماح بالـ USB • جاري فتح الكاميرا");
                 bestSize = pickSize();
                 resized = bestSize != null;
                 try {
@@ -341,12 +393,14 @@ public class MainActivity extends Activity {
                 } catch (Throwable ignored) { }
                 cam.startPreview();
                 camOpen = true;
+                updateTvStatus("المنظار متصل • " + fw + "×" + fh + " • في انتظار أول Frame");
                 js("open");
             }
 
             @Override
             public void onCameraClose(UsbDevice device) {
                 camOpen = false;
+                updateTvStatus("الكاميرا اتقفلت");
                 js("closed");
             }
 
@@ -356,11 +410,14 @@ public class MainActivity extends Activity {
             @Override
             public void onDetach(UsbDevice device) {
                 camOpen = false;
+                updateTvStatus("المنظار اتفصل");
+                clearTvPreview();
                 js("detached");
             }
 
             @Override
             public void onCancel(UsbDevice device) {
+                updateTvStatus("تم إلغاء صلاحية USB");
                 js("cancel");
             }
         });
@@ -401,6 +458,17 @@ public class MainActivity extends Activity {
             seq++;
             frameLock.notifyAll();
         }
+
+        long now = SystemClock.uptimeMillis();
+        if (fpsWindowStart == 0) fpsWindowStart = now;
+        fpsFrames++;
+        if (now - fpsWindowStart >= 1000) {
+            lastFps = fpsFrames * 1000f / Math.max(1, now - fpsWindowStart);
+            fpsFrames = 0;
+            fpsWindowStart = now;
+            updateTvStatus("LIVE • " + fw + "×" + fh + " • " + String.format(java.util.Locale.US, "%.1f", lastFps) + " FPS");
+        }
+        queueTvPreview();
     }
 
     private void onScopeButton() {
@@ -450,6 +518,173 @@ public class MainActivity extends Activity {
     }
 
 
+    // ================= TV / remote controls =================
+    private void setupTvControls() {
+        tvControls = new LinearLayout(this);
+        tvControls.setOrientation(LinearLayout.HORIZONTAL);
+        tvControls.setGravity(Gravity.CENTER);
+        tvControls.setPadding(dp(12), dp(8), dp(12), dp(8));
+        tvControls.setBackgroundColor(0xCC111111);
+
+        retryButton = makeTvButton("إعادة توصيل");
+        screenButton = makeTvButton("واجهة المرضى");
+        wifiButton = makeTvButton("Wi-Fi");
+        rotateButton = makeTvButton("تدوير");
+        exitButton = makeTvButton("خروج");
+
+        retryButton.setOnClickListener(v -> reconnectScope());
+        screenButton.setOnClickListener(v -> toggleScreenMode());
+        wifiButton.setOnClickListener(v -> toggleWifiStream());
+        rotateButton.setOnClickListener(v -> rotatePreview());
+        exitButton.setOnClickListener(v -> finish());
+
+        tvControls.addView(retryButton);
+        tvControls.addView(screenButton);
+        tvControls.addView(wifiButton);
+        tvControls.addView(rotateButton);
+        tvControls.addView(exitButton);
+
+        FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM);
+        root.addView(tvControls, controlsLp);
+
+        // Explicit D-pad order for cheap TV remotes.
+        retryButton.setId(View.generateViewId());
+        screenButton.setId(View.generateViewId());
+        wifiButton.setId(View.generateViewId());
+        rotateButton.setId(View.generateViewId());
+        exitButton.setId(View.generateViewId());
+
+        retryButton.setNextFocusRightId(screenButton.getId());
+        screenButton.setNextFocusLeftId(retryButton.getId());
+        screenButton.setNextFocusRightId(wifiButton.getId());
+        wifiButton.setNextFocusLeftId(screenButton.getId());
+        wifiButton.setNextFocusRightId(rotateButton.getId());
+        rotateButton.setNextFocusLeftId(wifiButton.getId());
+        rotateButton.setNextFocusRightId(exitButton.getId());
+        exitButton.setNextFocusLeftId(rotateButton.getId());
+
+        ui.postDelayed(() -> retryButton.requestFocus(), 350);
+    }
+
+    private Button makeTvButton(String label) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextSize(18);
+        b.setAllCaps(false);
+        b.setFocusable(true);
+        b.setFocusableInTouchMode(true);
+        b.setMinHeight(dp(58));
+        b.setPadding(dp(18), dp(6), dp(18), dp(6));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(64), 1f);
+        lp.setMargins(dp(5), 0, dp(5), 0);
+        b.setLayoutParams(lp);
+        b.setOnFocusChangeListener((v, hasFocus) -> {
+            v.setScaleX(hasFocus ? 1.06f : 1f);
+            v.setScaleY(hasFocus ? 1.06f : 1f);
+            b.setTextColor(hasFocus ? Color.BLACK : Color.WHITE);
+            b.setBackgroundColor(hasFocus ? 0xFFFFFFFF : 0xFF116EB5);
+        });
+        b.setTextColor(Color.WHITE);
+        b.setBackgroundColor(0xFF116EB5);
+        return b;
+    }
+
+    private void updateTvStatus(String msg) {
+        ui.post(() -> {
+            if (tvStatus != null) tvStatus.setText("TV TEST • " + msg);
+        });
+    }
+
+    private void queueTvPreview() {
+        if (showWebScreen || tvPreview == null) return;
+        long now = SystemClock.uptimeMillis();
+        if (now - lastPreviewQueued < 100) return; // target about 10 fps for the TV-box diagnostic build
+        if (!previewBusy.compareAndSet(false, true)) return;
+        lastPreviewQueued = now;
+
+        byte[] copy;
+        int w, h;
+        synchronized (frameLock) {
+            if (frame == null) {
+                previewBusy.set(false);
+                return;
+            }
+            copy = new byte[frame.length];
+            System.arraycopy(frame, 0, copy, 0, frame.length);
+            w = fw;
+            h = fh;
+        }
+
+        previewExec.execute(() -> {
+            Bitmap bmp = null;
+            try {
+                YuvImage yi = new YuvImage(copy, ImageFormat.NV21, w, h, null);
+                ByteArrayOutputStream bos = new ByteArrayOutputStream(Math.max(64 * 1024, w * h / 5));
+                if (yi.compressToJpeg(new Rect(0, 0, w, h), 82, bos)) {
+                    byte[] jpg = bos.toByteArray();
+                    bmp = BitmapFactory.decodeByteArray(jpg, 0, jpg.length);
+                }
+            } catch (Throwable ignored) { }
+
+            final Bitmap ready = bmp;
+            ui.post(() -> {
+                if (ready != null && tvPreview != null && !showWebScreen) {
+                    Bitmap old = lastTvBitmap;
+                    lastTvBitmap = ready;
+                    tvPreview.setImageBitmap(ready);
+                    if (old != null && old != ready && !old.isRecycled()) old.recycle();
+                }
+                previewBusy.set(false);
+            });
+        });
+    }
+
+    private void clearTvPreview() {
+        ui.post(() -> {
+            if (tvPreview != null) tvPreview.setImageDrawable(null);
+            Bitmap old = lastTvBitmap;
+            lastTvBitmap = null;
+            if (old != null && !old.isRecycled()) old.recycle();
+        });
+    }
+
+    private void toggleScreenMode() {
+        showWebScreen = !showWebScreen;
+        web.setVisibility(showWebScreen ? View.VISIBLE : View.GONE);
+        tvPreview.setVisibility(showWebScreen ? View.GONE : View.VISIBLE);
+        screenButton.setText(showWebScreen ? "صورة المنظار" : "واجهة المرضى");
+        updateTvStatus(showWebScreen ? "واجهة المرضى • التحكم من الشريط السفلي" :
+                (camOpen ? "صورة المنظار • " + fw + "×" + fh : "صورة المنظار • في انتظار الاتصال"));
+    }
+
+    private void rotatePreview() {
+        previewRotation = (previewRotation + 90) % 360;
+        tvPreview.setRotation(previewRotation);
+        rotateButton.setText("تدوير " + previewRotation + "°");
+    }
+
+    private void reconnectScope() {
+        updateTvStatus("إعادة تهيئة USB والكاميرا...");
+        camOpen = false;
+        synchronized (frameLock) {
+            frame = null;
+            work = null;
+            seq = 0;
+            served = 0;
+        }
+        clearTvPreview();
+        if (cam != null) {
+            try { cam.release(); } catch (Throwable ignored) { }
+            cam = null;
+        }
+        resized = false;
+        bestSize = null;
+        initCam();
+        ui.postDelayed(this::openFirstUvc, 500);
+    }
+
     // ================= Wi-Fi live view =================
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
@@ -468,7 +703,7 @@ public class MainActivity extends Activity {
             return;
         }
         wifiServer = server;
-        wifiButton.setText("Wi-Fi ON");
+        wifiButton.setText("إيقاف Wi-Fi");
 
         String ip = localWifiIpv4();
         final String url = ip == null ? null : "http://" + ip + ":" + WIFI_PORT + "/";
@@ -500,7 +735,7 @@ public class MainActivity extends Activity {
         WifiStreamServer s = wifiServer;
         wifiServer = null;
         if (s != null) s.stopServer();
-        if (wifiButton != null) wifiButton.setText("Wi-Fi View");
+        if (wifiButton != null) wifiButton.setText("Wi-Fi");
     }
 
     private String localWifiIpv4() {
@@ -839,7 +1074,7 @@ public class MainActivity extends Activity {
                 File f; String mime;
                 synchronized (outFiles) { f = outFiles.get(id); mime = outMime.get(id); }
                 if (f == null) continue;
-                uris.add(FileProvider.getUriForFile(MainActivity.this, "com.medicamall.scope.files", f));
+                uris.add(FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".files", f));
                 String m = (mime == null || mime.isEmpty()) ? "*/*" : mime;
                 if (type == null) type = m;
                 else if (!type.equals(m)) type = type.split("/")[0].equals(m.split("/")[0]) ? type.split("/")[0] + "/*" : "*/*";
@@ -906,7 +1141,29 @@ public class MainActivity extends Activity {
             chrome.onHideCustomView();
             return;
         }
+        if (showWebScreen) {
+            toggleScreenMode();
+            return;
+        }
         super.onBackPressed();
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            if (event.getKeyCode() == KeyEvent.KEYCODE_MENU) {
+                if (tvControls != null) {
+                    tvControls.setVisibility(tvControls.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE);
+                    if (tvControls.getVisibility() == View.VISIBLE && retryButton != null) retryButton.requestFocus();
+                }
+                return true;
+            }
+            if (event.getKeyCode() == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                toggleScreenMode();
+                return true;
+            }
+        }
+        return super.dispatchKeyEvent(event);
     }
 
     @Override
@@ -919,6 +1176,8 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         stopWifiStream();
         camOpen = false;
+        previewExec.shutdownNow();
+        clearTvPreview();
         if (cam != null) {
             try { cam.release(); } catch (Throwable ignored) { }
             cam = null;
