@@ -533,7 +533,12 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (cam == null) initCam();
         handleUsbIntent(intent);
+        if (intent != null
+                && UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) {
+            ui.postDelayed(this::openFirstUvc, 250);
+        }
     }
 
     private void onFrame(ByteBuffer buf) {
@@ -1897,17 +1902,6 @@ public class MainActivity extends Activity {
             }
         }
         return super.dispatchKeyEvent(event);
-    }
-
-    @Override
-    protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        setIntent(intent);
-        if (intent != null
-                && UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) {
-            if (cam == null) initCam();
-            ui.postDelayed(this::openFirstUvc, 250);
-        }
     }
 
     @Override
