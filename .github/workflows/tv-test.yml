@@ -1,0 +1,66 @@
+name: Build TV Box Test APK
+
+on:
+  push:
+    branches: [test/tv-box-remote]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tv-box-test-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Get previous production APK as web-screen fallback
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download app -p MedicaMall-Scope.apk -O /tmp/prev.apk || true
+
+      - name: Pull latest exam screen
+        run: python3 tools/prepare_web.py
+
+      - name: Build TV-box remote test APK
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASS }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > /tmp/release.jks
+            export KS_FILE=/tmp/release.jks
+          fi
+          gradle assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk MedicaMall-Scope-TV-Test.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MedicaMall-Scope-TV-Test
+          path: MedicaMall-Scope-TV-Test.apk
+
+      - name: Publish isolated TV test pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view tv-test >/dev/null 2>&1; then
+            gh release upload tv-test MedicaMall-Scope-TV-Test.apk --clobber
+          else
+            gh release create tv-test MedicaMall-Scope-TV-Test.apk \
+              --title "Medica Mall Scope - TV Box Test" \
+              --notes "Side-by-side X96/TV-box diagnostic build with native D-pad controls, full-screen native preview, safe UVC resolution selection, frame/FPS status, Wi-Fi view and rotation." \
+              --prerelease
+          fi
