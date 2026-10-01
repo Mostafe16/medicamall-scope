@@ -41,22 +41,22 @@ public class Updates {
     static final String UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36 MedicaMallScope";
     static final String SHIM = "<script src=\"native-shim.js\"></script>";
     static final String SESSION_BRIDGE =
-            "/* ---------- Android native media bridge (in page scope) ---------- */\\n" +
-            "window.__mmPageImportNativeMedia = async function(item){\\n" +
-            "  try{\\n" +
-            "    if(!item || !item.url) throw new Error('missing media url');\\n" +
-            "    const r = await fetch(item.url,{cache:'no-store'});\\n" +
-            "    if(!r.ok) throw new Error('HTTP '+r.status);\\n" +
-            "    const blob = await r.blob();\\n" +
-            "    if(!blob || !blob.size) throw new Error('empty media');\\n" +
-            "    await saveMedia(blob,item.type||'photo',item.ext||'jpg',item.dur||0);\\n" +
-            "    await renderGallery();\\n" +
-            "    try{window.BesNative&&BesNative.sessionImportResult(item.type||'photo',true,'');}catch(e){}\\n" +
-            "  }catch(e){\\n" +
-            "    try{window.BesNative&&BesNative.sessionImportResult(item&&item.type||'photo',false,String(e&&e.message||e||'unknown'));}catch(x){}\\n" +
-            "  }\\n" +
-            "};\\n" +
-            "(function(){const q=window.__mmPendingNativeMedia||[];window.__mmPendingNativeMedia=[];q.forEach(x=>window.__mmPageImportNativeMedia(x));})();\\n";
+            "/* ---------- Android native media bridge (in page scope) ---------- */\n" +
+            "window.__mmPageImportNativeMedia = async function(item){\n" +
+            "  try{\n" +
+            "    if(!item || !item.url) throw new Error('missing media url');\n" +
+            "    const r = await fetch(item.url,{cache:'no-store'});\n" +
+            "    if(!r.ok) throw new Error('HTTP '+r.status);\n" +
+            "    const blob = await r.blob();\n" +
+            "    if(!blob || !blob.size) throw new Error('empty media');\n" +
+            "    await saveMedia(blob,item.type||'photo',item.ext||'jpg',item.dur||0);\n" +
+            "    await renderGallery();\n" +
+            "    try{window.BesNative&&BesNative.sessionImportResult(item.type||'photo',true,'');}catch(e){}\n" +
+            "  }catch(e){\n" +
+            "    try{window.BesNative&&BesNative.sessionImportResult(item&&item.type||'photo',false,String(e&&e.message||e||'unknown'));}catch(x){}\n" +
+            "  }\n" +
+            "};\n" +
+            "(function(){const q=window.__mmPendingNativeMedia||[];window.__mmPendingNativeMedia=[];q.forEach(x=>window.__mmPageImportNativeMedia(x));})();\n";
 
     static String patchExamHtml(String html) {
         if (html == null) return null;
