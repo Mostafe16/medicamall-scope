@@ -162,6 +162,7 @@
       '.grid2{gap:0 10px!important}.plist{gap:7px!important}.prow{padding:7px 9px!important;border-radius:10px!important;gap:8px!important}.prow b{font-size:13px!important}.prow small{font-size:10px!important}.prow button{min-height:38px!important;padding:6px 10px!important;font-size:11px!important}' +
       '.sigbox{padding:8px!important;margin-top:8px!important}#sigPad{display:none!important}.sigbox>label:nth-of-type(2){display:none!important}.viewer img,.viewer video{max-height:58vh!important;object-fit:contain!important}' +
       '#dlgShare .actions,#dlgSettings .actions{grid-template-columns:repeat(2,minmax(0,1fr))!important}' +
+      '#btnFull,#sigClear,#sigSave{display:none!important}' +
       '}' +
       '.mm-tv-stepper{display:grid;grid-template-columns:40px 58px 40px;align-items:center;justify-content:center;gap:6px;margin:4px auto 8px!important;direction:ltr;width:max-content;max-width:100%}' +
       '.mm-tv-step-btn{width:40px!important;height:38px!important;min-width:40px!important;min-height:38px!important;padding:0!important;border:0!important;border-radius:9px!important;background:#116eb5!important;color:#fff!important;font-size:22px!important;font-weight:900!important;line-height:1!important}' +
@@ -259,7 +260,9 @@
 
     var visibleFocusables = function () {
       var q = 'button:not([disabled]),a[href],input:not([disabled]):not([data-mm-tv-step-id]),select:not([disabled]),textarea:not([disabled]),[role="button"],[onclick],.item,.upl';
-      return Array.prototype.filter.call(document.querySelectorAll(q), function (el) {
+      // an open dialog is modal: only move inside it
+      var scope = document.querySelector('dialog[open]') || document;
+      return Array.prototype.filter.call(scope.querySelectorAll(q), function (el) {
         var r = el.getBoundingClientRect();
         var st = getComputedStyle(el);
         return r.width > 4 && r.height > 4 && st.display !== 'none' && st.visibility !== 'hidden';
@@ -314,6 +317,7 @@
       }
       if (e.key === 'Enter' && el && el.classList && el.classList.contains('item')) {
         e.preventDefault();
+        if (e.repeat) return;
         var now = Date.now();
         if (el.__mmLastEnter && now - el.__mmLastEnter < 450) {
           el.__mmLastEnter = 0;
@@ -358,7 +362,13 @@
         if(dlg.open){
           makeFocusable(dlg);
           setTimeout(function(){
-            var f = dlg.querySelector('input:not([type=file]):not([disabled]),select:not([disabled]),button:not([disabled]),textarea:not([disabled]),.upl');
+            // first field, else first action button – never the × close button
+            var f = dlg.querySelector('input:not([type=file]):not([type=hidden]):not([disabled]):not([data-mm-tv-step-id]),select:not([disabled]),textarea:not([disabled])');
+            if(!f){
+              var bs = dlg.querySelectorAll('button:not([disabled]),.upl');
+              for(var i=0;i<bs.length;i++){ if((bs[i].textContent||'').trim()!=='×'){ f=bs[i]; break; } }
+              if(!f) f = bs[0];
+            }
             if(f) try{f.focus();}catch(e){}
           },60);
         }
