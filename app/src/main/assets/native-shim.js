@@ -104,9 +104,38 @@
     document.getElementById('mmUpdX').onclick = function () { d.remove(); };
   };
 
+  /* ---------------- Wi-Fi live view: button inside the camera tools (no floating native button) ---------------- */
+  if (typeof N.wifiToggle === 'function') {
+    var wifiOn = function () { try { return !!JSON.parse(N.wifiState()).on; } catch (e) { return false; } };
+    var paintWifi = function () {
+      var b = document.getElementById('btnWifi');
+      if (!b) return;
+      var on = wifiOn();
+      b.textContent = on ? '📡 إيقاف البث' : '📡 بث Wi-Fi';
+      b.style.background = on ? '#c62828' : '';
+      b.style.borderColor = on ? '#c62828' : '';
+      b.style.color = on ? '#fff' : '';
+    };
+    var addWifi = function () {
+      if (document.getElementById('btnWifi')) return;
+      var ref = document.getElementById('btnViewReset');
+      if (!ref || !ref.parentNode) return;
+      var b = document.createElement('button');
+      b.type = 'button'; b.id = 'btnWifi'; b.className = 'ghost';
+      b.title = 'اعرض صورة المنظار على لابتوب أو موبايل تاني على نفس شبكة الـ Wi-Fi';
+      b.onclick = function () { N.wifiToggle(); };
+      ref.parentNode.insertBefore(b, ref.nextSibling);
+      paintWifi();
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', addWifi, { once: true });
+    else addWifi();
+    window.__mmWifiPaint = paintWifi;
+  }
+
   /* events from Android */
   window.__besNative = function (evt) {
     if (evt === 'button') { onButton(); return; }
+    if (evt === 'wifi') { if (window.__mmWifiPaint) window.__mmWifiPaint(); return; }
     if (evt === 'webupdate') { showUpdateBar(); return; }
     if ((evt === 'detached' || evt === 'closed') && active) active.end();
     if (evt === 'open') N.toast('المنظار اتوصل ✔');
