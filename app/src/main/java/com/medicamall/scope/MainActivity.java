@@ -121,17 +121,7 @@ public class MainActivity extends Activity {
         root.addView(web, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        wifiButton = new Button(this);
-        wifiButton.setAllCaps(false);
-        wifiButton.setText("Wi-Fi View");
-        wifiButton.setTextSize(12);
-        FrameLayout.LayoutParams wifiLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.END);
-        int margin = dp(14);
-        wifiLp.setMargins(margin, margin, margin, margin);
-        root.addView(wifiButton, wifiLp);
-        wifiButton.setOnClickListener(v -> toggleWifiStream());
+        // Wi-Fi View button lives inside the web page (camera tools), see native-shim.js.
 
         setContentView(root);
 
@@ -468,7 +458,7 @@ public class MainActivity extends Activity {
             return;
         }
         wifiServer = server;
-        wifiButton.setText("Wi-Fi ON");
+        js("wifi");
 
         String ip = localWifiIpv4();
         final String url = ip == null ? null : "http://" + ip + ":" + WIFI_PORT + "/";
@@ -483,7 +473,7 @@ public class MainActivity extends Activity {
         }
 
         AlertDialog.Builder dialog = new AlertDialog.Builder(this)
-                .setTitle("Wi-Fi Live View")
+                .setTitle("📡 بث Wi-Fi شغال")
                 .setMessage(message)
                 .setNegativeButton("إغلاق", null);
         if (url != null) {
@@ -491,6 +481,12 @@ public class MainActivity extends Activity {
                 ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
                 cm.setPrimaryClip(ClipData.newPlainText("Medica Mall Scope Wi-Fi", url));
                 toast("تم نسخ الرابط");
+            });
+            dialog.setNeutralButton("مشاركة", (d, w) -> {
+                Intent share = new Intent(Intent.ACTION_SEND);
+                share.setType("text/plain");
+                share.putExtra(Intent.EXTRA_TEXT, "بث المنظار المباشر (نفس شبكة الـ Wi-Fi): " + url);
+                try { startActivity(Intent.createChooser(share, "مشاركة رابط البث")); } catch (Exception ignored) { }
             });
         }
         dialog.show();
@@ -500,7 +496,7 @@ public class MainActivity extends Activity {
         WifiStreamServer s = wifiServer;
         wifiServer = null;
         if (s != null) s.stopServer();
-        if (wifiButton != null) wifiButton.setText("Wi-Fi View");
+        js("wifi");
     }
 
     private String localWifiIpv4() {
@@ -602,7 +598,7 @@ public class MainActivity extends Activity {
             ui.post(() -> {
                 if (wifiServer == this) {
                     wifiServer = null;
-                    if (wifiButton != null) wifiButton.setText("Wi-Fi View");
+                    js("wifi");
                 }
             });
         }
@@ -888,6 +884,18 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void toast(String msg) { MainActivity.this.toast(msg); }
+
+        @JavascriptInterface
+        public void wifiToggle() { ui.post(MainActivity.this::toggleWifiStream); }
+
+        @JavascriptInterface
+        public String wifiState() {
+            WifiStreamServer s = wifiServer;
+            boolean on = s != null && s.isRunning();
+            String ip = on ? localWifiIpv4() : null;
+            String url = ip == null ? "" : "http://" + ip + ":" + WIFI_PORT + "/";
+            return "{\"on\":" + on + ",\"url\":\"" + url + "\"}";
+        }
     }
 
     // ================= lifecycle =================
