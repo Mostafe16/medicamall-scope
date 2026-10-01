@@ -1,0 +1,52 @@
+name: Build Mac Test
+
+on:
+  push:
+    branches: [test/mac-app]
+    paths:
+      - 'mac/**'
+      - '.github/workflows/mac-test.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mac-test
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bundle exam screen + icon
+        run: |
+          pip install --quiet pillow
+          python mac/prepare.py
+
+      - name: Build app
+        run: bash mac/build.sh ${{ github.run_number }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MedicaMall-Scope-Mac-Test
+          path: MedicaMall-Scope-Mac-Test.zip
+
+      - name: Publish isolated pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view mac-test >/dev/null 2>&1; then
+            gh release upload mac-test MedicaMall-Scope-Mac-Test.zip --clobber
+          else
+            gh release create mac-test MedicaMall-Scope-Mac-Test.zip --target "${{ github.sha }}" \
+              --title "Medica Mall Scope - Mac Test" \
+              --notes "Mac test build (Apple Silicon + Intel, macOS 12+). Production Android / Windows apps are unchanged." \
+              --prerelease
+          fi
