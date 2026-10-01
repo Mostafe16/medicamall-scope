@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>ar</string>
+	<key>CFBundleExecutable</key><string>MedicaMallScope</string>
+	<key>CFBundleIdentifier</key><string>com.medicamall.scope.mactest</string>
+	<key>CFBundleName</key><string>MedicaMall Scope Test</string>
+	<key>CFBundleDisplayName</key><string>Medica Mall Scope (Mac Test)</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>__VERSION__</string>
+	<key>CFBundleVersion</key><string>__BUILD__</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
+	<key>LSMinimumSystemVersion</key><string>12.0</string>
+	<key>LSApplicationCategoryType</key><string>public.app-category.medical</string>
+	<key>NSHighResolutionCapable</key><true/>
+	<key>NSPrincipalClass</key><string>NSApplication</string>
+	<key>NSCameraUsageDescription</key><string>البرنامج محتاج الكاميرا عشان يعرض صورة المنظار ويصور.</string>
+	<key>NSMicrophoneUsageDescription</key><string>البرنامج مش بيسجل صوت؛ الإذن ده بيطلبه النظام مع الكاميرا أحيانًا.</string>
+</dict>
+</plist>
