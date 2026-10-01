@@ -106,52 +106,47 @@
   };
 
   /* scope's own button on Windows.
-     The scope only reports one press every ~2 s through the still-image channel (tested 2026-10-01),
-     so a fast double press can't be detected. Instead the button works in a mode the doctor picks:
-       📷 صورة  -> every press takes a photo immediately
-       🎥 فيديو -> every press starts / stops recording */
+     The scope reports at most one press every ~2 s on Windows (tested 2026-10-01), so the
+     "double press" window is 3 s:
+       press            -> the picture freezes at that moment (that's the photo)
+       2nd press ≤ 3 s  -> unfreeze + start video
+       no 2nd press     -> the frozen picture is saved as a photo, live view resumes
+       any press while recording -> stop video */
+  var WINDOW_MS = 3000;
   var clickId = function (id) { var b = document.getElementById(id); if (b && !b.disabled) { b.click(); return true; } log(id + ' not clickable'); return false; };
-  var recBtnText = function () { var b = document.getElementById('btnRec'); return b ? b.textContent.trim() : '-'; };
-  var MODE_KEY = 'mm_btn_mode';
-  var mode = 'photo';
-  try { mode = localStorage.getItem(MODE_KEY) === 'video' ? 'video' : 'photo'; } catch (e) {}
-  var paintMode = function () {
-    var bar = document.getElementById('mmBtnMode');
-    if (!bar) return;
-    bar.querySelectorAll('button').forEach(function (b) {
-      var on = b.getAttribute('data-m') === mode;
-      b.style.background = on ? (mode === 'video' ? '#c62828' : '#0d6fcc') : '#fff';
-      b.style.color = on ? '#fff' : '#0a3f7d';
-    });
-  };
-  var setMode = function (m) {
-    mode = m === 'video' ? 'video' : 'photo';
-    try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
-    paintMode(); log('button mode -> ' + mode);
-  };
-  var addModeBar = function () {
-    if (document.getElementById('mmBtnMode') || !document.body) return;
-    var bar = document.createElement('div'); bar.id = 'mmBtnMode';
-    bar.style.cssText = 'position:fixed;left:14px;bottom:14px;z-index:9998;display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #cfe0f2;border-radius:999px;padding:5px 6px 5px 12px;box-shadow:0 6px 18px rgba(10,63,125,.18);font:700 13px/1.3 system-ui,"Segoe UI",sans-serif;color:#0a3f7d;direction:rtl';
-    bar.innerHTML = '<span>زر المنظار:</span>'
-      + '<button type="button" data-m="photo" style="border:1px solid #cfe0f2;border-radius:999px;padding:6px 12px;font:inherit;cursor:pointer">📷 صورة</button>'
-      + '<button type="button" data-m="video" style="border:1px solid #cfe0f2;border-radius:999px;padding:6px 12px;font:inherit;cursor:pointer">🎥 فيديو</button>';
-    bar.querySelectorAll('button').forEach(function (b) { b.onclick = function () { setMode(b.getAttribute('data-m')); }; });
-    document.body.appendChild(bar); paintMode();
-  };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', addModeBar, { once: true }); else addModeBar();
+  var btnText = function (id) { var b = document.getElementById(id); return b ? b.textContent.trim() : '-'; };
+  var isRecording = function () { return /إيقاف/.test(btnText('btnRec')); };
+  var isFrozen = function () { return /إلغاء/.test(btnText('btnFreeze')); };
+  var pending = null, weFroze = false, firstAt = 0;
+  var unfreeze = function () { if (weFroze && isFrozen()) clickId('btnFreeze'); weFroze = false; };
   var onButton = function () {
-    if (mode === 'video') {
-      var wasRec = /إيقاف/.test(recBtnText());
-      log('button -> ' + (wasRec ? 'stop' : 'start') + ' video');
-      badge(wasRec ? '⏹ إيقاف الفيديو' : '⏺ بدأ تسجيل الفيديو', '#c62828');
+    var now = Date.now();
+    if (pending) {
+      clearTimeout(pending); pending = null;
+      unfreeze();
+      log('button #2 after ' + (now - firstAt) + 'ms -> start video');
+      badge('⏺ بدأ تسجيل الفيديو', '#c62828');
       clickId('btnRec');
-      setTimeout(function () { log('video button now: ' + recBtnText()); }, 900);
+      setTimeout(function () { log('video button now: ' + btnText('btnRec')); }, 900);
       return;
     }
-    log('button -> photo');
-    badge('📷 صورة');
-    clickId('btnSnap');
+    if (isRecording()) {
+      log('button while recording -> stop video');
+      badge('⏹ إيقاف الفيديو', '#c62828');
+      clickId('btnRec');
+      return;
+    }
+    firstAt = now;
+    weFroze = false;
+    if (!isFrozen() && clickId('btnFreeze')) weFroze = true;   // keep the exact moment of the press
+    log('button #1 -> waiting ' + WINDOW_MS + 'ms for a 2nd press');
+    badge('📷 اتصورت – اضغط تاني خلال 3 ثواني للفيديو');
+    pending = setTimeout(function () {
+      pending = null;
+      log('no 2nd press -> photo');
+      clickId('btnSnap');
+      setTimeout(unfreeze, 150);
+    }, WINDOW_MS);
   };
 
   /* new exam-screen version downloaded in the background */
