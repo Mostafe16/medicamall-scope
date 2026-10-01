@@ -126,6 +126,13 @@ public class MainActivity extends Activity {
     private Button lastPhotoButton;
     private Button rotateButton;
     private Button exitButton;
+    private Button reconnectButton;
+    private long lastBackAt = 0;
+    private Runnable recordWatchdog;
+    private byte[] pressFrame;
+    private int pressW, pressH;
+    private volatile long lastImportResultAt = 0;
+    private final ExecutorService ioExec = Executors.newSingleThreadExecutor();
     private File lastSavedPhotoFile;
     private Uri lastSavedPhotoUri;
     private final List<Size> qualitySizes = new ArrayList<>();
@@ -150,7 +157,7 @@ public class MainActivity extends Activity {
     private long lastWifiEncode = 0;
 
     private final Map<String, NativeSessionFile> nativeSessionFiles =
-            Collections.synchronizedMap(new HashMap<>());
+            Collections.synchronizedMap(new LinkedHashMap<>());
 
     private static final class NativeSessionFile {
         final File file;
@@ -218,11 +225,11 @@ public class MainActivity extends Activity {
         root.addView(photoReview, reviewLp);
 
         tvStatus = new TextView(this);
-        tvStatus.setText("TV TEST • في انتظار المنظار");
+        tvStatus.setText("في انتظار المنظار…");
         tvStatus.setTextColor(Color.WHITE);
         tvStatus.setTextSize(14);
-        tvStatus.setPadding(dp(16), dp(10), dp(16), dp(10));
-        tvStatus.setBackgroundColor(0xAA000000);
+        tvStatus.setPadding(dp(16), dp(9), dp(16), dp(9));
+        tvStatus.setBackground(pill(0xB3000000, 0));
         FrameLayout.LayoutParams statusLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.TOP | Gravity.START);
@@ -230,11 +237,11 @@ public class MainActivity extends Activity {
         root.addView(tvStatus, statusLp);
 
         scopeButtonIndicator = new TextView(this);
-        scopeButtonIndicator.setText("زرار المنظار: 0");
+        scopeButtonIndicator.setText("زر المنظار");
         scopeButtonIndicator.setTextColor(Color.WHITE);
         scopeButtonIndicator.setTextSize(15);
         scopeButtonIndicator.setGravity(Gravity.CENTER);
-        scopeButtonIndicator.setPadding(dp(18), dp(10), dp(18), dp(10));
+        scopeButtonIndicator.setPadding(dp(18), dp(9), dp(18), dp(9));
         scopeButtonIndicator.setBackgroundColor(0xCC116EB5);
         FrameLayout.LayoutParams buttonIndicatorLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -352,7 +359,7 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(), "BesNative");
         web.loadUrl(START_URL);
         ui.postDelayed(() -> web.evaluateJavascript(
-                "window.__mmTvSetVisible&&window.__mmTvSetVisible(false)", null), 1200);
+                "window.__mmTvSetVisible&&window.__mmTvSetVisible(" + showWebScreen + ")", null), 1200);
 
         if (!hasCameraPerm() || needsLegacyWrite()) requestPerms();
         initCam();
@@ -512,6 +519,7 @@ public class MainActivity extends Activity {
             @Override
             public void onCameraClose(UsbDevice device) {
                 camOpen = false;
+                ui.post(() -> abortRecording("الكاميرا اتقفلت أثناء التسجيل • الجزء المسجّل اتحفظ لو موجود"));
                 updateTvStatus("الكاميرا اتقفلت");
                 js("closed");
             }
@@ -522,14 +530,15 @@ public class MainActivity extends Activity {
             @Override
             public void onDetach(UsbDevice device) {
                 camOpen = false;
-                updateTvStatus("المنظار اتفصل");
+                ui.post(() -> abortRecording("المنظار اتفصل أثناء التسجيل"));
+                updateTvStatus("المنظار اتفصل • وصّله تاني");
                 clearTvPreview();
                 js("detached");
             }
 
             @Override
             public void onCancel(UsbDevice device) {
-                updateTvStatus("تم إلغاء صلاحية USB");
+                updateTvStatus("اتلغت صلاحية USB • اضغط «إعادة توصيل»");
                 js("cancel");
             }
         });
@@ -620,8 +629,20 @@ public class MainActivity extends Activity {
             // Second press inside the window: this is a double press.
             ui.removeCallbacks(pendingSingleScopePress);
             pendingSingleScopePress = null;
+            pressFrame = null;
             toggleVideoRecording();
             return;
+        }
+
+        // Keep the frame from the moment of the press (not 430 ms later) for the photo.
+        synchronized (frameLock) {
+            if (frame != null) {
+                pressFrame = frame.clone();
+                pressW = fw;
+                pressH = fh;
+            } else {
+                pressFrame = null;
+            }
         }
 
         pendingSingleScopePress = () -> {
@@ -638,16 +659,23 @@ public class MainActivity extends Activity {
         }
         if (videoTransition) return;
 
-        byte[] copy;
-        int w, h;
-        synchronized (frameLock) {
-            copy = new byte[frame.length];
-            System.arraycopy(frame, 0, copy, 0, frame.length);
-            w = fw; h = fh;
+        final byte[] copy;
+        final int w, h;
+        if (pressFrame != null) {
+            copy = pressFrame;
+            w = pressW;
+            h = pressH;
+            pressFrame = null;
+        } else {
+            synchronized (frameLock) {
+                copy = frame.clone();
+                w = fw;
+                h = fh;
+            }
         }
 
         flashCapture();
-        previewExec.execute(() -> {
+        runBg(ioExec, () -> {
             String name = "Scope_" + fileStamp() + ".jpg";
             File dir = new File(getFilesDir(), "captures/photos");
             File file = new File(dir, name);
@@ -679,7 +707,7 @@ public class MainActivity extends Activity {
                     lastSavedPhotoUri = published;
                     importNativeMediaIntoSession(file, "image/jpeg", "photo", "jpg", 0);
                     updateTvStatus("تم حفظ الصورة ✓ • جاري ربطها بالجلسة...");
-                    if (lastPhotoButton != null) lastPhotoButton.setText("الصور ✓");
+                    if (lastPhotoButton != null) lastPhotoButton.setText("آخر صورة ✓");
                 } else {
                     updateTvStatus("فشل حفظ الصورة • " + String.valueOf(error));
                 }
@@ -759,7 +787,7 @@ public class MainActivity extends Activity {
         web.setVisibility(View.GONE);
         photoReview.setImageBitmap(bmp);
         photoReview.setVisibility(View.VISIBLE);
-        updateTvStatus("آخر صورة • Back للرجوع");
+        updateTvStatus("آخر صورة • اضغط رجوع للعودة");
     }
 
     private File findLatestInternalPhoto() {
@@ -798,6 +826,7 @@ public class MainActivity extends Activity {
     private void startVideoRecording() {
         videoTransition = true;
         updateTvStatus("جاري بدء تسجيل الفيديو...");
+        armRecordWatchdog(6000, "تعذر بدء التسجيل • جرّب تاني");
 
         try {
             String name = "Scope_" + fileStamp() + ".mp4";
@@ -814,6 +843,7 @@ public class MainActivity extends Activity {
                 @Override
                 public void onStart() {
                     ui.post(() -> {
+                        cancelRecordWatchdog();
                         videoTransition = false;
                         videoRecording = true;
                         videoStartedAt = SystemClock.uptimeMillis();
@@ -828,7 +858,10 @@ public class MainActivity extends Activity {
                     activeVideoFile = null;
                     videoTransition = false;
                     videoRecording = false;
-                    stopRecordingTicker();
+                    ui.post(() -> {
+                        cancelRecordWatchdog();
+                        stopRecordingTicker();
+                    });
 
                     if (savedFile == null || !savedFile.exists() || savedFile.length() == 0) {
                         ui.post(() -> updateTvStatus("التسجيل توقف لكن ملف الفيديو غير موجود"));
@@ -840,7 +873,7 @@ public class MainActivity extends Activity {
                             Math.round((SystemClock.uptimeMillis() - videoStartedAt) / 1000.0));
                     importNativeMediaIntoSession(
                             savedFile, "video/mp4", "video", "mp4", sessionDur);
-                    previewExec.execute(() -> {
+                    runBg(ioExec, () -> {
                         Uri gallery = null;
                         String err = null;
                         try {
@@ -871,6 +904,7 @@ public class MainActivity extends Activity {
                     final File failedFile = activeVideoFile;
                     activeVideoFile = null;
                     ui.post(() -> {
+                        cancelRecordWatchdog();
                         videoTransition = false;
                         videoRecording = false;
                         stopRecordingTicker();
@@ -885,6 +919,7 @@ public class MainActivity extends Activity {
                 }
             });
         } catch (Throwable t) {
+            cancelRecordWatchdog();
             activeVideoFile = null;
             videoTransition = false;
             videoRecording = false;
@@ -896,9 +931,11 @@ public class MainActivity extends Activity {
         if (cam == null) return;
         videoTransition = true;
         updateTvStatus("جاري إيقاف وحفظ الفيديو...");
+        armRecordWatchdog(8000, "التسجيل وقف • لو الفيديو ماظهرش في الجلسة جرّب تاني");
         try {
             cam.stopRecording();
         } catch (Throwable t) {
+            cancelRecordWatchdog();
             videoTransition = false;
             updateTvStatus("تعذر إيقاف التسجيل • " + t.getMessage());
         }
@@ -917,6 +954,7 @@ public class MainActivity extends Activity {
                     scopeButtonIndicator.setText(String.format(Locale.US,
                             "● REC %02d:%02d", min, sec));
                     scopeButtonIndicator.setBackgroundColor(0xFFD32F2F);
+                    if (!showWebScreen) scopeButtonIndicator.setVisibility(View.VISIBLE);
                 }
                 ui.postDelayed(this, 1000);
             }
@@ -929,6 +967,58 @@ public class MainActivity extends Activity {
             ui.removeCallbacks(recordingTicker);
             recordingTicker = null;
         }
+    }
+
+    private void armRecordWatchdog(long ms, String message) {
+        cancelRecordWatchdog();
+        recordWatchdog = () -> {
+            recordWatchdog = null;
+            if (!videoTransition) return;
+            videoTransition = false;
+            if (cam == null || !cam.isRecording()) {
+                videoRecording = false;
+                stopRecordingTicker();
+                resetScopeIndicator();
+            }
+            updateTvStatus(message);
+        };
+        ui.postDelayed(recordWatchdog, ms);
+    }
+
+    private void cancelRecordWatchdog() {
+        if (recordWatchdog != null) {
+            ui.removeCallbacks(recordWatchdog);
+            recordWatchdog = null;
+        }
+    }
+
+    /** Camera closed / unplugged / app hidden while recording: never leave REC stuck on. */
+    private void abortRecording(String why) {
+        boolean was = videoRecording || videoTransition;
+        if (cam != null) {
+            try { if (cam.isRecording()) cam.stopRecording(); } catch (Throwable ignored) { }
+        }
+        cancelRecordWatchdog();
+        videoRecording = false;
+        videoTransition = false;
+        stopRecordingTicker();
+        if (scopeButtonIndicator != null) scopeButtonIndicator.setVisibility(View.GONE);
+        if (was) updateTvStatus(why);
+    }
+
+    private void runBg(ExecutorService ex, Runnable r) {
+        if (ex.isShutdown()) return;
+        try {
+            ex.execute(r);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) { }
+    }
+
+    private android.graphics.drawable.GradientDrawable pill(int color, int strokeColor) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(14));
+        if (strokeColor != 0) g.setStroke(dp(2), strokeColor);
+        return g;
     }
 
     private void resetScopeIndicator() {
@@ -999,41 +1089,48 @@ public class MainActivity extends Activity {
         tvControls.setBackgroundColor(0xE6111820);
 
         screenButton = makeTvButton("المرضى");
-        wifiButton = makeTvButton("Wi-Fi");
-        lastPhotoButton = makeTvButton("الصور");
+        lastPhotoButton = makeTvButton("آخر صورة");
         rotateButton = makeTvButton("تدوير");
+        wifiButton = makeTvButton("بث Wi-Fi");
+        reconnectButton = makeTvButton("إعادة توصيل");
         exitButton = makeTvButton("خروج");
+        exitButton.setTag("exit");
+        styleTvButton(exitButton, false);
 
         screenButton.setOnClickListener(v -> toggleScreenMode());
         wifiButton.setOnClickListener(v -> toggleWifiStream());
         lastPhotoButton.setOnClickListener(v -> openLastPhoto());
         rotateButton.setOnClickListener(v -> rotatePreview());
-        exitButton.setOnClickListener(v -> finish());
+        reconnectButton.setOnClickListener(v -> {
+            if (videoRecording || videoTransition) {
+                toast("وقّف تسجيل الفيديو الأول (ضغطتين على زر المنظار)");
+                return;
+            }
+            reconnectScope();
+        });
+        exitButton.setOnClickListener(v -> confirmExit());
 
-        tvControls.addView(screenButton);
-        tvControls.addView(wifiButton);
-        tvControls.addView(lastPhotoButton);
-        tvControls.addView(rotateButton);
+        // Arabic reading order: the first button (المرضى) sits on the right.
         tvControls.addView(exitButton);
+        tvControls.addView(reconnectButton);
+        tvControls.addView(wifiButton);
+        tvControls.addView(rotateButton);
+        tvControls.addView(lastPhotoButton);
+        tvControls.addView(screenButton);
 
         FrameLayout.LayoutParams controlsLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, dp(72), Gravity.BOTTOM);
         root.addView(tvControls, controlsLp);
 
-        screenButton.setId(View.generateViewId());
-        wifiButton.setId(View.generateViewId());
-        lastPhotoButton.setId(View.generateViewId());
-        rotateButton.setId(View.generateViewId());
-        exitButton.setId(View.generateViewId());
-
-        screenButton.setNextFocusRightId(wifiButton.getId());
-        wifiButton.setNextFocusLeftId(screenButton.getId());
-        wifiButton.setNextFocusRightId(lastPhotoButton.getId());
-        lastPhotoButton.setNextFocusLeftId(wifiButton.getId());
-        lastPhotoButton.setNextFocusRightId(rotateButton.getId());
-        rotateButton.setNextFocusLeftId(lastPhotoButton.getId());
-        rotateButton.setNextFocusRightId(exitButton.getId());
-        exitButton.setNextFocusLeftId(rotateButton.getId());
+        Button[] order = { screenButton, lastPhotoButton, rotateButton, wifiButton, reconnectButton, exitButton };
+        for (Button b : order) b.setId(View.generateViewId());
+        for (int i = 0; i < order.length; i++) {
+            // visual order is right-to-left, so "left" moves to the next button
+            order[i].setNextFocusLeftId(order[Math.min(i + 1, order.length - 1)].getId());
+            order[i].setNextFocusRightId(order[Math.max(i - 1, 0)].getId());
+            order[i].setNextFocusUpId(order[i].getId());
+            order[i].setNextFocusDownId(order[i].getId());
+        }
 
         ui.postDelayed(() -> screenButton.requestFocus(), 350);
     }
@@ -1051,14 +1148,41 @@ public class MainActivity extends Activity {
         lp.setMargins(dp(5), 0, dp(5), 0);
         b.setLayoutParams(lp);
         b.setOnFocusChangeListener((v, hasFocus) -> {
-            v.setScaleX(hasFocus ? 1.06f : 1f);
-            v.setScaleY(hasFocus ? 1.06f : 1f);
-            b.setTextColor(hasFocus ? Color.BLACK : Color.WHITE);
-            b.setBackgroundColor(hasFocus ? 0xFFFFFFFF : 0xFF116EB5);
+            v.setScaleX(hasFocus ? 1.07f : 1f);
+            v.setScaleY(hasFocus ? 1.07f : 1f);
+            styleTvButton(b, hasFocus);
         });
-        b.setTextColor(Color.WHITE);
-        b.setBackgroundColor(0xFF116EB5);
+        b.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        b.setStateListAnimator(null);
+        styleTvButton(b, false);
         return b;
+    }
+
+    private void styleTvButton(Button b, boolean focused) {
+        boolean exit = "exit".equals(b.getTag());
+        if (focused) {
+            b.setBackground(pill(0xFFFFC233, 0xFFFFFFFF));
+            b.setTextColor(0xFF0A3F7D);
+        } else if (exit) {
+            b.setBackground(pill(0xFF2A3038, 0xFFC62828));
+            b.setTextColor(0xFFFFB4B4);
+        } else {
+            b.setBackground(pill(0xFF116EB5, 0));
+            b.setTextColor(Color.WHITE);
+        }
+    }
+
+    private void confirmExit() {
+        if (videoRecording || videoTransition) {
+            toast("وقّف تسجيل الفيديو الأول (ضغطتين على زر المنظار)");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("الخروج من البرنامج؟")
+                .setMessage("المرضى والصور محفوظين على الجهاز.")
+                .setPositiveButton("خروج", (d, w) -> finish())
+                .setNegativeButton("إلغاء", null)
+                .show();
     }
 
     private void updateTvStatus(String msg) {
@@ -1087,7 +1211,7 @@ public class MainActivity extends Activity {
             h = fh;
         }
 
-        previewExec.execute(() -> {
+        runBg(previewExec, () -> {
             Bitmap bmp = null;
             try {
                 bmp = nv21ToBitmap(copy, w, h);
@@ -1156,10 +1280,11 @@ public class MainActivity extends Activity {
     }
 
     private void toggleScreenMode() {
+        closePhotoReview();
         showWebScreen = !showWebScreen;
         web.setVisibility(showWebScreen ? View.VISIBLE : View.GONE);
         tvPreview.setVisibility(showWebScreen ? View.GONE : View.VISIBLE);
-        screenButton.setText(showWebScreen ? "صورة المنظار" : "واجهة المرضى");
+        screenButton.setText("المرضى");
 
         if (showWebScreen) {
             web.evaluateJavascript(
@@ -1177,7 +1302,7 @@ public class MainActivity extends Activity {
                 if (web != null) {
                     web.evaluateJavascript(
                             "window.__mmTvFocusFirst&&window.__mmTvFocusFirst()", null);
-                    toast("الأسهم للحركة • OK للاختيار • Back يرجع لصورة المنظار");
+                    toast("الأسهم للتنقل • OK للاختيار • رجوع لصورة المنظار");
                 }
             }, 180);
         } else {
@@ -1185,7 +1310,9 @@ public class MainActivity extends Activity {
                     "window.__mmTvSetVisible&&window.__mmTvSetVisible(false)", null);
             if (tvControls != null) tvControls.setVisibility(View.VISIBLE);
             if (tvStatus != null) tvStatus.setVisibility(View.VISIBLE);
-            if (scopeButtonIndicator != null) scopeButtonIndicator.setVisibility(View.VISIBLE);
+            if (scopeButtonIndicator != null) {
+                scopeButtonIndicator.setVisibility(videoRecording ? View.VISIBLE : View.GONE);
+            }
 
             web.clearFocus();
             web.setFocusable(false);
@@ -1447,7 +1574,7 @@ public class MainActivity extends Activity {
             served = 0;
         }
         scopeButtonCount = 0;
-        if (scopeButtonIndicator != null) scopeButtonIndicator.setText("زرار المنظار: 0");
+        if (scopeButtonIndicator != null) scopeButtonIndicator.setText("زر المنظار");
         clearTvPreview();
         if (cam != null) {
             try { cam.release(); } catch (Throwable ignored) { }
@@ -1473,7 +1600,7 @@ public class MainActivity extends Activity {
         nativeSessionFiles.put(token, new NativeSessionFile(file, mime));
 
         synchronized (nativeSessionFiles) {
-            while (nativeSessionFiles.size() > 12) {
+            while (nativeSessionFiles.size() > 40) {
                 String first = nativeSessionFiles.keySet().iterator().next();
                 nativeSessionFiles.remove(first);
             }
@@ -1488,7 +1615,14 @@ public class MainActivity extends Activity {
                 + "if(window.__mmImportNativeMedia){window.__mmImportNativeMedia(x);}"
                 + "else{(window.__mmPendingNativeMedia=window.__mmPendingNativeMedia||[]).push(x);}"
                 + "})()";
+        final long startedAt = SystemClock.uptimeMillis();
         ui.post(() -> web.evaluateJavascript(script, null));
+        ui.postDelayed(() -> {
+            if (lastImportResultAt < startedAt) {
+                updateTvStatus(("video".equals(type) ? "الفيديو" : "الصورة")
+                        + " محفوظ على الجهاز • الربط بالجلسة ماردش – افتح «المرضى» واتأكد");
+            }
+        }, 20000);
     }
 
     private WebResourceResponse nativeSessionMediaResponse(Uri uri) {
@@ -1536,7 +1670,7 @@ public class MainActivity extends Activity {
             return;
         }
         wifiServer = server;
-        wifiButton.setText("إيقاف Wi-Fi");
+        wifiButton.setText("إيقاف البث");
 
         String ip = localWifiIpv4();
         final String url = ip == null ? null : "http://" + ip + ":" + WIFI_PORT + "/";
@@ -1568,7 +1702,7 @@ public class MainActivity extends Activity {
         WifiStreamServer s = wifiServer;
         wifiServer = null;
         if (s != null) s.stopServer();
-        if (wifiButton != null) wifiButton.setText("Wi-Fi");
+        if (wifiButton != null) wifiButton.setText("بث Wi-Fi");
     }
 
     private String localWifiIpv4() {
@@ -1670,7 +1804,7 @@ public class MainActivity extends Activity {
             ui.post(() -> {
                 if (wifiServer == this) {
                     wifiServer = null;
-                    if (wifiButton != null) wifiButton.setText("Wi-Fi View");
+                    if (wifiButton != null) wifiButton.setText("بث Wi-Fi");
                 }
             });
         }
@@ -1956,6 +2090,7 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void sessionImportResult(String type, boolean ok, String message) {
+            lastImportResultAt = SystemClock.uptimeMillis();
             ui.post(() -> {
                 if (ok) {
                     updateTvStatus("video".equals(type)
@@ -1994,10 +2129,28 @@ public class MainActivity extends Activity {
             return;
         }
         if (showWebScreen) {
-            toggleScreenMode();
+            // close an open web dialog first; only then go back to the scope picture
+            web.evaluateJavascript(
+                    "(function(){var d=document.querySelector('dialog[open]');if(d){d.close();return 1}return 0})()",
+                    v -> { if (!"1".equals(v)) toggleScreenMode(); });
             return;
         }
-        super.onBackPressed();
+        if (tvControls != null && tvControls.getVisibility() != View.VISIBLE) {
+            tvControls.setVisibility(View.VISIBLE);
+            if (screenButton != null) screenButton.requestFocus();
+            return;
+        }
+        if (videoRecording || videoTransition) {
+            toast("وقّف تسجيل الفيديو الأول (ضغطتين على زر المنظار)");
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastBackAt < 2000) {
+            super.onBackPressed();
+            return;
+        }
+        lastBackAt = now;
+        toast("اضغط رجوع مرة تانية للخروج");
     }
 
     @Override
@@ -2025,20 +2178,33 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onStop() {
+        super.onStop();
+        // HOME / another app while recording: stop and save instead of recording in the background
+        if (!isChangingConfigurations() && (videoRecording || videoTransition)) {
+            if (videoRecording) stopVideoRecording();
+            else abortRecording("التسجيل اتوقف لأن البرنامج اتقفل");
+        }
+    }
+
+    @Override
     protected void onDestroy() {
         stopWifiStream();
         camOpen = false;
         if (pendingSingleScopePress != null) ui.removeCallbacks(pendingSingleScopePress);
+        cancelRecordWatchdog();
         stopRecordingTicker();
         if (cam != null && (videoRecording || cam.isRecording())) {
             try { cam.stopRecording(); } catch (Throwable ignored) { }
         }
-        previewExec.shutdownNow();
-        clearTvPreview();
+        // release the camera first so no frame/video callback reaches a dead executor
         if (cam != null) {
             try { cam.release(); } catch (Throwable ignored) { }
             cam = null;
         }
+        previewExec.shutdownNow();
+        ioExec.shutdown();
+        clearTvPreview();
         if (web != null) web.destroy();
         super.onDestroy();
     }
