@@ -87,12 +87,46 @@
     };
   }
 
-  /* scope's own button: 1 press = photo, 2 presses = record */
-  var btnT = null;
-  var clickId = function (id) { var b = document.getElementById(id); if (b && !b.disabled) b.click(); };
+  /* diagnostics -> %LOCALAPPDATA%\MedicaMallScope\log.txt */
+  var log = function (m) { try { W.postMessage('log:' + m); } catch (e) {} };
+  window.addEventListener('error', function (e) { log('js error: ' + (e && e.message)); });
+  window.addEventListener('unhandledrejection', function (e) { log('js promise: ' + (e && e.reason && (e.reason.message || e.reason))); });
+
+  /* on-screen confirmation of every scope-button press */
+  var badgeT = null;
+  var badge = function (txt, bg) {
+    var d = document.getElementById('mmBtnBadge');
+    if (!d) {
+      d = document.createElement('div'); d.id = 'mmBtnBadge';
+      d.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;color:#fff;border-radius:999px;padding:8px 18px;font:700 15px/1.4 system-ui,"Segoe UI",sans-serif;box-shadow:0 6px 18px rgba(0,0,0,.25);pointer-events:none;direction:rtl';
+      (document.body || document.documentElement).appendChild(d);
+    }
+    d.textContent = txt; d.style.background = bg || '#0a3f7d'; d.style.display = 'block';
+    clearTimeout(badgeT); badgeT = setTimeout(function () { d.style.display = 'none'; }, 1400);
+  };
+
+  /* scope's own button: 1 press = photo, 2 presses = record
+     (Windows delivers the press through the camera's still-image channel, which adds a little delay,
+      so the double-press window is wider than on Android) */
+  var DOUBLE_MS = 700;
+  var btnT = null, firstAt = 0;
+  var clickId = function (id) { var b = document.getElementById(id); if (b && !b.disabled) { b.click(); return true; } log(id + ' not clickable'); return false; };
+  var recBtnText = function () { var b = document.getElementById('btnRec'); return b ? b.textContent.trim() : '-'; };
   var onButton = function () {
-    if (btnT) { clearTimeout(btnT); btnT = null; clickId('btnRec'); return; }
-    btnT = setTimeout(function () { btnT = null; clickId('btnSnap'); }, 450);
+    var now = Date.now();
+    if (btnT) {
+      clearTimeout(btnT); btnT = null;
+      var wasRec = /إيقاف/.test(recBtnText());
+      log('button #2 after ' + (now - firstAt) + 'ms -> ' + (wasRec ? 'stop' : 'start') + ' video');
+      badge(wasRec ? '⏹ إيقاف الفيديو' : '⏺ تسجيل فيديو', '#c62828');
+      clickId('btnRec');
+      setTimeout(function () { log('video button now: ' + recBtnText()); }, 900);
+      return;
+    }
+    firstAt = now;
+    log('button #1');
+    badge('زر المنظار ✓');
+    btnT = setTimeout(function () { btnT = null; log('single press -> photo'); clickId('btnSnap'); }, DOUBLE_MS);
   };
 
   /* new exam-screen version downloaded in the background */
