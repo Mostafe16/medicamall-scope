@@ -105,28 +105,53 @@
     clearTimeout(badgeT); badgeT = setTimeout(function () { d.style.display = 'none'; }, 1400);
   };
 
-  /* scope's own button: 1 press = photo, 2 presses = record
-     (Windows delivers the press through the camera's still-image channel, which adds a little delay,
-      so the double-press window is wider than on Android) */
-  var DOUBLE_MS = 700;
-  var btnT = null, firstAt = 0;
+  /* scope's own button on Windows.
+     The scope only reports one press every ~2 s through the still-image channel (tested 2026-10-01),
+     so a fast double press can't be detected. Instead the button works in a mode the doctor picks:
+       📷 صورة  -> every press takes a photo immediately
+       🎥 فيديو -> every press starts / stops recording */
   var clickId = function (id) { var b = document.getElementById(id); if (b && !b.disabled) { b.click(); return true; } log(id + ' not clickable'); return false; };
   var recBtnText = function () { var b = document.getElementById('btnRec'); return b ? b.textContent.trim() : '-'; };
+  var MODE_KEY = 'mm_btn_mode';
+  var mode = 'photo';
+  try { mode = localStorage.getItem(MODE_KEY) === 'video' ? 'video' : 'photo'; } catch (e) {}
+  var paintMode = function () {
+    var bar = document.getElementById('mmBtnMode');
+    if (!bar) return;
+    bar.querySelectorAll('button').forEach(function (b) {
+      var on = b.getAttribute('data-m') === mode;
+      b.style.background = on ? (mode === 'video' ? '#c62828' : '#0d6fcc') : '#fff';
+      b.style.color = on ? '#fff' : '#0a3f7d';
+    });
+  };
+  var setMode = function (m) {
+    mode = m === 'video' ? 'video' : 'photo';
+    try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
+    paintMode(); log('button mode -> ' + mode);
+  };
+  var addModeBar = function () {
+    if (document.getElementById('mmBtnMode') || !document.body) return;
+    var bar = document.createElement('div'); bar.id = 'mmBtnMode';
+    bar.style.cssText = 'position:fixed;left:14px;bottom:14px;z-index:9998;display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #cfe0f2;border-radius:999px;padding:5px 6px 5px 12px;box-shadow:0 6px 18px rgba(10,63,125,.18);font:700 13px/1.3 system-ui,"Segoe UI",sans-serif;color:#0a3f7d;direction:rtl';
+    bar.innerHTML = '<span>زر المنظار:</span>'
+      + '<button type="button" data-m="photo" style="border:1px solid #cfe0f2;border-radius:999px;padding:6px 12px;font:inherit;cursor:pointer">📷 صورة</button>'
+      + '<button type="button" data-m="video" style="border:1px solid #cfe0f2;border-radius:999px;padding:6px 12px;font:inherit;cursor:pointer">🎥 فيديو</button>';
+    bar.querySelectorAll('button').forEach(function (b) { b.onclick = function () { setMode(b.getAttribute('data-m')); }; });
+    document.body.appendChild(bar); paintMode();
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', addModeBar, { once: true }); else addModeBar();
   var onButton = function () {
-    var now = Date.now();
-    if (btnT) {
-      clearTimeout(btnT); btnT = null;
+    if (mode === 'video') {
       var wasRec = /إيقاف/.test(recBtnText());
-      log('button #2 after ' + (now - firstAt) + 'ms -> ' + (wasRec ? 'stop' : 'start') + ' video');
-      badge(wasRec ? '⏹ إيقاف الفيديو' : '⏺ تسجيل فيديو', '#c62828');
+      log('button -> ' + (wasRec ? 'stop' : 'start') + ' video');
+      badge(wasRec ? '⏹ إيقاف الفيديو' : '⏺ بدأ تسجيل الفيديو', '#c62828');
       clickId('btnRec');
       setTimeout(function () { log('video button now: ' + recBtnText()); }, 900);
       return;
     }
-    firstAt = now;
-    log('button #1');
-    badge('زر المنظار ✓');
-    btnT = setTimeout(function () { btnT = null; log('single press -> photo'); clickId('btnSnap'); }, DOUBLE_MS);
+    log('button -> photo');
+    badge('📷 صورة');
+    clickId('btnSnap');
   };
 
   /* new exam-screen version downloaded in the background */
