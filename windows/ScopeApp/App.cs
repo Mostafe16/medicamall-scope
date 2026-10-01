@@ -497,7 +497,7 @@ namespace MedicaMallScope
             tray.DoubleClick += (s, e) => ShowApp();
             SetAutoStart(autoItem.Checked);
 
-            cam.Button += () => { try { BeginInvoke(new Action(() => Event("button"))); } catch { } };
+            cam.Button += () => { Paths.Log("scope button"); try { BeginInvoke(new Action(() => Event("button"))); } catch { } };
             Shown += (s, e) => EnsureInit();
             FormClosing += OnClosing;
             poll.Tick += (s, e) => Tick();
@@ -635,6 +635,7 @@ namespace MedicaMallScope
                 string m = null;
                 try { m = e.TryGetWebMessageAsString(); } catch { }
                 if (m == "reloadWeb") cw.Reload();
+                else if (m != null && m.StartsWith("log:")) Paths.Log("web: " + m.Substring(4));
             };
             cw.Navigate(Host + "/index.html");
             Tick();
