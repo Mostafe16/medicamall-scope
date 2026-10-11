@@ -1,0 +1,72 @@
+name: Build واجهة 2 (test APK)
+
+# Side-by-side test copy of the Android app. Production (`app` release, main) is never touched:
+# own package (com.medicamall.scope.wajha2), own data, own pre-release `wajha-2`, own update channel.
+on:
+  push:
+    branches: [claude/exciting-hopper-itydb1]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wajha-2
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      MM_VARIANT: wajha2
+      # Exam screen source. Set the repo variable WAJHA2_WEB_URL (e.g. a separate Magento page) to test web changes;
+      # until then it uses the live production page.
+      WEB_URL: ${{ vars.WAJHA2_WEB_URL || 'https://medicamall.com/ent-scope' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Get previous production APK (fallback if the site is unreachable)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download app -p MedicaMall-Scope.apk -O /tmp/prev.apk || true
+
+      - name: Pull exam screen
+        run: python3 tools/prepare_web.py
+
+      - name: Build APK
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASS }}
+        run: |
+          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > /tmp/release.jks; export KS_FILE=/tmp/release.jks; else echo "::warning::Release signing secret unavailable; using debug signing."; fi
+          gradle assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk MedicaMall-Scope-Wajha2.apk
+          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"url\": \"https://github.com/${GITHUB_REPOSITORY}/releases/download/wajha-2/MedicaMall-Scope-Wajha2.apk\"}" > version.json
+          cat version.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MedicaMall-Scope-Wajha2
+          path: MedicaMall-Scope-Wajha2.apk
+
+      - name: Publish isolated pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view wajha-2 >/dev/null 2>&1; then
+            gh release upload wajha-2 MedicaMall-Scope-Wajha2.apk version.json --clobber
+          else
+            gh release create wajha-2 MedicaMall-Scope-Wajha2.apk version.json \
+              --title "Medica Mall Scope - واجهة 2 (Test)" \
+              --notes "Side-by-side test build. Installs next to the production app with its own data; production users are not affected." \
+              --prerelease --latest=false --target "${GITHUB_SHA}"
+          fi

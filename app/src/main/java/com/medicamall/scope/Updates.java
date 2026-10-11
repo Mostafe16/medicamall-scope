@@ -34,10 +34,10 @@ import java.util.regex.Pattern;
  */
 public class Updates {
 
-    static final String WEB_URL = "https://medicamall.com/ent-scope";
-    static final String BASE = "https://github.com/Mostafe16/medicamall-scope/releases/download/app/";
+    static final String WEB_URL = BuildConfig.WEB_URL;
+    static final String BASE = "https://github.com/Mostafe16/medicamall-scope/releases/download/" + BuildConfig.RELEASE_TAG + "/";
     static final String VERSION_URL = BASE + "version.json";
-    static final String APK_URL = BASE + "MedicaMall-Scope.apk";
+    static final String APK_URL = BASE + BuildConfig.APK_NAME;
     static final String UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36 MedicaMallScope";
     static final String SHIM = "<script src=\"native-shim.js\"></script>";
 
@@ -114,7 +114,7 @@ public class Updates {
             try {
                 File dir = new File(a.getCacheDir(), "update");
                 dir.mkdirs();
-                File f = new File(dir, "MedicaMall-Scope.apk");
+                File f = new File(dir, BuildConfig.APK_NAME);
                 try (OutputStream o = new FileOutputStream(f)) { o.write(get(apk)); }
                 a.runOnUiThread(() -> { wait.dismiss(); install(a, f); });
             } catch (Throwable t) {
@@ -135,7 +135,7 @@ public class Updates {
             return;
         }
         pendingApk = null;
-        Uri u = FileProvider.getUriForFile(a, "com.medicamall.scope.files", f);
+        Uri u = FileProvider.getUriForFile(a, a.getPackageName() + ".files", f);
         Intent i = new Intent(Intent.ACTION_VIEW);
         i.setDataAndType(u, "application/vnd.android.package-archive");
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);

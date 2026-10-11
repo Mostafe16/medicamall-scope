@@ -4,19 +4,29 @@ plugins {
 
 def runNo = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as Integer
 def ksFile = System.getenv('KS_FILE')
+// MM_VARIANT=wajha2 builds "واجهة 2": a side-by-side test copy (own package, own data, own update channel).
+// Unset = the production app, unchanged.
+def wajha2 = System.getenv('MM_VARIANT') == 'wajha2'
+def webUrl = System.getenv('WEB_URL') ?: 'https://medicamall.com/ent-scope'
 
 android {
     namespace 'com.medicamall.scope'
     compileSdk 34
 
     defaultConfig {
-        applicationId 'com.medicamall.scope'
+        applicationId wajha2 ? 'com.medicamall.scope.wajha2' : 'com.medicamall.scope'
         minSdk 24
         // 33 on purpose: avoids Android 14 receiver-export crashes inside the UVC library
         targetSdk 33
         versionCode runNo
-        versionName "1.0.${runNo}"
+        versionName wajha2 ? "wajha2.${runNo}" : "1.0.${runNo}"
+        resValue 'string', 'app_name', wajha2 ? 'Medica Mall Scope واجهة 2' : 'Medica Mall Scope'
+        buildConfigField 'String', 'WEB_URL', "\"${webUrl}\""
+        buildConfigField 'String', 'RELEASE_TAG', wajha2 ? '"wajha-2"' : '"app"'
+        buildConfigField 'String', 'APK_NAME', wajha2 ? '"MedicaMall-Scope-Wajha2.apk"' : '"MedicaMall-Scope.apk"'
     }
+
+    buildFeatures { buildConfig true }
 
     signingConfigs {
         release {

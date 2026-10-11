@@ -545,7 +545,7 @@ public class MainActivity extends Activity {
                 File f; String mime;
                 synchronized (outFiles) { f = outFiles.get(id); mime = outMime.get(id); }
                 if (f == null) continue;
-                uris.add(FileProvider.getUriForFile(MainActivity.this, "com.medicamall.scope.files", f));
+                uris.add(FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".files", f));
                 String m = (mime == null || mime.isEmpty()) ? "*/*" : mime;
                 if (type == null) type = m;
                 else if (!type.equals(m)) type = type.split("/")[0].equals(m.split("/")[0]) ? type.split("/")[0] + "/*" : "*/*";
