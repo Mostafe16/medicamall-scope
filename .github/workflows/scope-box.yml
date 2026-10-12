@@ -1,0 +1,70 @@
+name: Build Scope Box APK
+
+on:
+  push:
+    branches: [test/scope-box]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: scope-box
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Get previous production APK as web-screen fallback
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download app -p MedicaMall-Scope.apk -O /tmp/prev.apk || true
+
+      - name: Reuse stable exam screen
+        env:
+          WEB_URL: http://127.0.0.1:1
+          RETRY_SLEEP: "0"
+          PREV_APK: /tmp/prev.apk
+        run: python3 tools/prepare_web.py
+
+      - name: Build Scope Box APK
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASS }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > /tmp/release.jks
+            export KS_FILE=/tmp/release.jks
+          fi
+          gradle assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk MedicaMall-Scope-Box.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MedicaMall-Scope-Box
+          path: MedicaMall-Scope-Box.apk
+
+      - name: Publish isolated Scope Box pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view scope-box >/dev/null 2>&1; then
+            gh release upload scope-box MedicaMall-Scope-Box.apk --clobber
+          else
+            gh release create scope-box MedicaMall-Scope-Box.apk \
+              --title "Medica Mall Scope Box (X96 / any HDMI screen)" \
+              --notes "Isolated Scope Box build: auto-start after boot, optional dedicated home-screen mode, always full screen, PIN technician menu. Separate app id (com.medicamall.scope.box); production and tv-test untouched." \
+              --prerelease --latest=false
+          fi

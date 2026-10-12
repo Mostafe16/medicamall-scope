@@ -194,6 +194,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        BoxMode.immersive(this);
         WebView.setWebContentsDebuggingEnabled(true);
 
         root = new FrameLayout(this);
@@ -349,7 +350,7 @@ public class MainActivity extends Activity {
                 if (customView == null) return;
                 ((FrameLayout) getWindow().getDecorView()).removeView(customView);
                 customView = null;
-                getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                BoxMode.immersive(MainActivity.this);
                 if (customCb != null) customCb.onCustomViewHidden();
                 customCb = null;
             }
@@ -1109,6 +1110,11 @@ public class MainActivity extends Activity {
             reconnectScope();
         });
         exitButton.setOnClickListener(v -> confirmExit());
+        // Scope Box: hidden technician menu (long-press OK on «خروج»)
+        exitButton.setOnLongClickListener(v -> {
+            BoxMode.askPin(MainActivity.this, MainActivity.this::finish);
+            return true;
+        });
 
         // Arabic reading order: the first button (المرضى) sits on the right.
         tvControls.addView(exitButton);
@@ -1175,6 +1181,10 @@ public class MainActivity extends Activity {
     private void confirmExit() {
         if (videoRecording || videoTransition) {
             toast("وقّف تسجيل الفيديو الأول (ضغطتين على زر المنظار)");
+            return;
+        }
+        if (BoxMode.homeMode(this)) {
+            toast("الجهاز مخصص للمنظار • للخروج: اضغط مطوّل على «خروج» وادخل كود الفني");
             return;
         }
         new AlertDialog.Builder(this)
@@ -2144,6 +2154,10 @@ public class MainActivity extends Activity {
             toast("وقّف تسجيل الفيديو الأول (ضغطتين على زر المنظار)");
             return;
         }
+        if (BoxMode.homeMode(this)) {
+            toast("الجهاز مخصص للمنظار • للخروج: اضغط مطوّل على «خروج» وادخل كود الفني");
+            return;
+        }
         long now = SystemClock.uptimeMillis();
         if (now - lastBackAt < 2000) {
             super.onBackPressed();
@@ -2174,7 +2188,14 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        BoxMode.immersive(this);
         Updates.onResume(this);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) BoxMode.immersive(this);
     }
 
     @Override

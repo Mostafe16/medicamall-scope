@@ -10,12 +10,13 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId 'com.medicamall.scope.tvtest'
+        // separate app id: installs side by side with production and the TV test build
+        applicationId 'com.medicamall.scope.box'
         minSdk 24
         // 33 on purpose: avoids Android 14 receiver-export crashes inside the UVC library
         targetSdk 33
         versionCode runNo
-        versionName "tv-test.${runNo}"
+        versionName "box.${runNo}"
     }
 
     signingConfigs {
