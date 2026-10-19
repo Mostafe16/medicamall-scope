@@ -34,7 +34,13 @@ def from_apk(path='prev.apk'):
     return html.replace('<script src="native-shim.js"></script>', '', 1)
 
 
-app = from_site()
+REPO_SCREEN = os.path.join(HERE, '..', '..', 'web', 'index.html')
+if os.path.exists(REPO_SCREEN):
+    # the exam screen lives in this repo (web/index.html)
+    app = open(REPO_SCREEN, encoding='utf-8').read()
+    print('exam screen from repo: web/index.html')
+else:
+    app = from_site()
 if app is None:
     app = from_apk()
     if app is None:
@@ -42,7 +48,8 @@ if app is None:
     print('::warning::Site not reachable - used the exam screen from the Android APK')
 
 os.makedirs(os.path.join(HERE, 'web'), exist_ok=True)
-with open(os.path.join(HERE, 'web', 'index.html'), 'w', encoding='utf-8') as f:
+# newline='' keeps the file byte-identical to the GitHub copy (no CRLF on Windows), so the app doesn't see a fake "update"
+with open(os.path.join(HERE, 'web', 'index.html'), 'w', encoding='utf-8', newline='') as f:
     f.write(app)
 
 logo = re.search(r'id="defLogo"[^>]*?src="data:image/png;base64,([^"]+)"', app) or \

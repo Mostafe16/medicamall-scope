@@ -54,9 +54,9 @@ public class Updates {
         new Thread(() -> {
             try {
                 String page = new String(get(WEB_URL + "?v=" + System.currentTimeMillis()), StandardCharsets.UTF_8);
+                // GitHub serves the screen as plain HTML; the old site page wraps it as base64 in 'var B64'
                 Matcher m = Pattern.compile("var B64 = \"([A-Za-z0-9+/=]+)\"").matcher(page);
-                if (!m.find()) return;
-                String html = new String(Base64.decode(m.group(1), Base64.DEFAULT), StandardCharsets.UTF_8);
+                String html = m.find() ? new String(Base64.decode(m.group(1), Base64.DEFAULT), StandardCharsets.UTF_8) : page;
                 if (!html.contains("btnSnap") || !html.contains("</html>")) return; // sanity check
                 html = html.contains("<head>") ? html.replaceFirst("<head>", "<head>" + SHIM) : SHIM + html;
 

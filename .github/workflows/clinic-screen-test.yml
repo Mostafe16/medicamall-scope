@@ -1,0 +1,72 @@
+name: Test build - new exam screen from GitHub
+
+# Test only: builds from feature/clinic-screen and uploads workflow artifacts. Nothing is published:
+# production releases (app / win-app) and wajha-2 are never touched.
+on:
+  push:
+    branches: [feature/clinic-screen]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clinic-screen-test
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Bundle exam screen (web/index.html from the repo)
+        run: python3 tools/prepare_web.py
+      - name: Build APK (side-by-side test package, screen updates from this branch)
+        env:
+          MM_VARIANT: wajha2
+          WEB_URL: https://raw.githubusercontent.com/Mostafe16/medicamall-scope/feature/clinic-screen/web/index.html
+          KS_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASS }}
+        run: |
+          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > /tmp/release.jks; export KS_FILE=/tmp/release.jks; fi
+          grep -q btnWB app/src/main/assets/index.html || { echo "new screen not bundled"; exit 1; }
+          gradle assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk MedicaMall-Scope-NewScreen-Test.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Android-NewScreen-Test
+          path: MedicaMall-Scope-NewScreen-Test.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Bundle exam screen + icon
+        shell: bash
+        run: |
+          pip install --quiet pillow
+          python windows/ScopeApp/prepare_web.py
+          cmp web/index.html windows/ScopeApp/web/index.html && echo "bundled screen identical to repo copy"
+      - name: Build
+        run: dotnet build windows/ScopeApp/ScopeApp.csproj -c Release -o out -p:Version=1.0.${{ github.run_number }}
+      - name: Package
+        shell: pwsh
+        run: |
+          Remove-Item out\*.pdb -ErrorAction SilentlyContinue
+          if (!(Test-Path out\MedicaMallScope.exe)) { throw "exe missing" }
+          if (!(Select-String -Path out\web\index.html -Pattern 'btnWB' -Quiet)) { throw "new screen not bundled" }
+          Compress-Archive -Path out\* -DestinationPath MedicaMallScope-NewScreen-Test.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-NewScreen-Test
+          path: MedicaMallScope-NewScreen-Test.zip

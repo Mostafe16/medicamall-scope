@@ -6,6 +6,8 @@ on:
     paths-ignore:
       - 'windows/**'
       - '.github/workflows/windows-test.yml'
+      # exam-screen edits reach the apps through the in-app screen update, no new APK needed
+      - 'web/**'
   workflow_dispatch:
 
 permissions:
