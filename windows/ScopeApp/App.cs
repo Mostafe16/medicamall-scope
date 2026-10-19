@@ -471,7 +471,8 @@ namespace MedicaMallScope
     // ---------------------------------------------------------------- updates
     static class Updates
     {
-        const string SiteUrl = "https://medicamall.com/ent-scope";
+        // exam screen: web/index.html in the public repo (plain HTML)
+        const string SiteUrl = "https://raw.githubusercontent.com/Mostafe16/medicamall-scope/main/web/index.html";
         const string Rel = "https://github.com/Mostafe16/medicamall-scope/releases/download/win-app/";
 
         static HttpClient Http()
@@ -491,9 +492,10 @@ namespace MedicaMallScope
             {
                 string page;
                 using (var c = Http()) page = await c.GetStringAsync(SiteUrl + "?v=" + DateTime.UtcNow.Ticks);
+                // GitHub serves plain HTML; the old site page wrapped it as base64 in 'var B64'
                 var m = Regex.Match(page, "var B64 = \"([A-Za-z0-9+/=]+)\"");
-                if (!m.Success) { Paths.Log("web update: B64 not found (" + page.Length + " chars)"); return false; }
-                string html = Encoding.UTF8.GetString(Convert.FromBase64String(m.Groups[1].Value));
+                string html = m.Success ? Encoding.UTF8.GetString(Convert.FromBase64String(m.Groups[1].Value)) : page;
+                if (!html.Contains("btnSnap") || !html.Contains("</html>")) { Paths.Log("web update: not an exam screen (" + page.Length + " chars)"); return false; }
                 if (html == WebApp.Raw()) return false;
                 WebApp.Save(html);
                 Paths.Log("web update saved (" + html.Length + " chars)");

@@ -45,7 +45,13 @@ def from_previous_apk():
     return html.replace('<script src="native-shim.js"></script>', '', 1)
 
 
-app = fetch_app()
+REPO_SCREEN = os.path.join(ROOT, 'web', 'index.html')
+if not os.environ.get('WEB_URL') and os.path.exists(REPO_SCREEN):
+    # production: the exam screen lives in this repo (web/index.html)
+    app = open(REPO_SCREEN, encoding='utf-8').read()
+    print('exam screen from repo: web/index.html')
+else:
+    app = fetch_app()
 if app is None:
     app = from_previous_apk()
     if app is None:

@@ -7,7 +7,8 @@ def ksFile = System.getenv('KS_FILE')
 // MM_VARIANT=wajha2 builds "واجهة 2": a side-by-side test copy (own package, own data, own update channel).
 // Unset = the production app, unchanged.
 def wajha2 = System.getenv('MM_VARIANT') == 'wajha2'
-def webUrl = System.getenv('WEB_URL') ?: 'https://medicamall.com/ent-scope'
+// exam screen source: web/index.html in this public repo (served raw by GitHub). WEB_URL can override (e.g. واجهة 2 test builds).
+def webUrl = System.getenv('WEB_URL') ?: 'https://raw.githubusercontent.com/Mostafe16/medicamall-scope/main/web/index.html'
 
 android {
     namespace 'com.medicamall.scope'
