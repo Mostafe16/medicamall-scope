@@ -3,6 +3,7 @@
 // live video is served to the page at /uvc/frame.jpg and the scope's hardware button (UVC still-pin trigger)
 // becomes photo (1 press) / record (2 presses). Auto-updates: exam screen from the site, app from GitHub releases.
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -147,20 +148,31 @@ namespace MedicaMallScope
         static readonly ImageCodecInfo JpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.MimeType == "image/jpeg");
 
         public string DevicePath;
-        public bool Running, HasButton;
+        public bool Running, HasButton, IsOto;
         public int W = 1280, H = 720;
         public event Action Button;
 
+        public static bool IsOtoscope(DsDevice d)
+        {
+            string p = ((d == null ? null : d.DevicePath) ?? "").ToLowerInvariant();
+            return p.Contains("vid_1224&pid_2825");
+        }
+
+        // the scope (Besdata) first; otherwise the Video Otoscope (USB 1224:2825)
         public static DsDevice Find()
         {
-            DsDevice found = null;
+            DsDevice scope = null, oto = null;
             foreach (var d in DsDevice.GetDevicesOfCat(FilterCategory.VideoInputDevice))
             {
                 string n = (d.Name ?? "").ToLowerInvariant();
-                if (found == null && (n.Contains("besdata") || n.Contains("endoscope"))) found = d;
+                if (scope == null && (n.Contains("besdata") || n.Contains("endoscope"))) scope = d;
+                // the otoscope has no still-image pin and no HID (Button Spy, 2026-10-10): its button can't reach the PC,
+                // so it stays a normal Windows camera (WebView2) – the app does not hold it natively
+                else if (oto == null && false && IsOtoscope(d)) oto = d;
                 else d.Dispose();
             }
-            return found;
+            if (scope != null) { if (oto != null) oto.Dispose(); return scope; }
+            return oto;
         }
 
         static void Chk(int hr, string what) { if (hr < 0) throw new Exception(what + " failed: 0x" + hr.ToString("X8")); }
@@ -233,6 +245,7 @@ namespace MedicaMallScope
                     Paths.Log("button trigger enable: 0x" + hr.ToString("X8"));
                 }
                 DevicePath = dev.DevicePath;
+                IsOto = IsOtoscope(dev);
                 Running = true;
                 Paths.Log("scope started: " + dev.Name + " " + W + "x" + H + " button=" + HasButton);
                 return true;
@@ -341,6 +354,85 @@ namespace MedicaMallScope
             graph = null; control = null; still = null; vc = null; capGrab = null; stillGrab = null;
             lock (frameLock) { raw = null; jpg = null; encSeq = -1; servedSeq = -1; }
         }
+    }
+
+    // ---------------------------------------------------------------- photos / videos on a USB drive (the device in storage mode)
+    static class DriveWatch
+    {
+        static readonly string[] Exts = { ".jpg", ".jpeg", ".png", ".bmp", ".mp4", ".avi", ".mov", ".mkv", ".3gp" };
+        static readonly object Lock = new object();
+        static string[] known = new string[0];
+        static List<string> files = new List<string>();
+        static string root = "";
+
+        // true when a removable drive appeared since the last call
+        public static bool Changed()
+        {
+            string[] now;
+            try { now = DriveInfo.GetDrives().Where(d => d.DriveType == DriveType.Removable && d.IsReady).Select(d => d.RootDirectory.FullName).OrderBy(x => x).ToArray(); }
+            catch { return false; }
+            bool added = now.Except(known).Any();
+            known = now;
+            return added;
+        }
+
+        static void Walk(string dir, int depth, List<string> acc)
+        {
+            if (depth > 4 || acc.Count >= 800) return;
+            try
+            {
+                foreach (var f in Directory.GetFiles(dir))
+                    if (Exts.Contains(Path.GetExtension(f).ToLowerInvariant())) acc.Add(f);
+                foreach (var d in Directory.GetDirectories(dir))
+                {
+                    var n = Path.GetFileName(d);
+                    if (n.StartsWith(".") || n.Equals("System Volume Information", StringComparison.OrdinalIgnoreCase) || n.StartsWith("$")) continue;
+                    Walk(d, depth + 1, acc);
+                }
+            }
+            catch { }
+        }
+
+        public static string ListJson()
+        {
+            var sb = new StringBuilder("{\"drives\":[");
+            lock (Lock)
+            {
+                files = new List<string>();
+                bool firstDrive = true;
+                foreach (var r in known)
+                {
+                    var acc = new List<string>();
+                    Walk(r, 0, acc);
+                    string label = "";
+                    try { label = new DriveInfo(r).VolumeLabel; } catch { }
+                    if (!firstDrive) sb.Append(','); firstDrive = false;
+                    sb.Append("{\"root\":\"").Append(Esc(r)).Append("\",\"label\":\"").Append(Esc(label)).Append("\",\"files\":[");
+                    for (int i = 0; i < acc.Count; i++)
+                    {
+                        var fi = new FileInfo(acc[i]);
+                        long ms = (long)(fi.LastWriteTimeUtc - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds;
+                        if (i > 0) sb.Append(',');
+                        sb.Append("{\"id\":").Append(files.Count).Append(",\"name\":\"").Append(Esc(fi.Name)).Append("\",\"path\":\"").Append(Esc(acc[i].Substring(r.Length)))
+                          .Append("\",\"size\":").Append(fi.Length).Append(",\"mtime\":").Append(ms).Append('}');
+                        files.Add(acc[i]);
+                    }
+                    sb.Append("]}");
+                }
+            }
+            return sb.Append("]}").ToString();
+        }
+
+        public static byte[] Read(int id, out string name)
+        {
+            name = "";
+            string p;
+            lock (Lock) { if (id < 0 || id >= files.Count) return null; p = files[id]; }
+            name = Path.GetFileName(p);
+            try { return File.ReadAllBytes(p); } catch (Exception ex) { Paths.Log("drive read: " + ex.Message); return null; }
+        }
+
+        static string Esc(string s) { return (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\""); }
     }
 
     // ---------------------------------------------------------------- exam screen (web app) files
@@ -672,7 +764,7 @@ namespace MedicaMallScope
 
         string StateJson()
         {
-            return "{\"connected\":" + (cam.Running ? "true" : "false") + ",\"w\":" + cam.W + ",\"h\":" + cam.H + ",\"button\":" + (cam.HasButton ? "true" : "false") + "}";
+            return "{\"connected\":" + (cam.Running ? "true" : "false") + ",\"w\":" + cam.W + ",\"h\":" + cam.H + ",\"button\":" + (cam.HasButton ? "true" : "false") + ",\"kind\":\"" + (cam.Running && cam.IsOto ? "oto" : "scope") + "\"}";
         }
 
         async void OnRequest(object sender, CoreWebView2WebResourceRequestedEventArgs e)
@@ -689,6 +781,22 @@ namespace MedicaMallScope
                     if (cam.Running) jpg = await Task.Run(() => cam.GetJpeg(150));
                     e.Response = jpg == null ? Resp(new byte[0], 204, "No Content", "text/plain") : Resp(jpg, 200, "OK", "image/jpeg");
                 }
+                else if (path == "/native/drive")
+                {
+                    d = e.GetDeferral();
+                    string json = await Task.Run(() => DriveWatch.ListJson());
+                    e.Response = Resp(Encoding.UTF8.GetBytes(json), 200, "OK", "application/json");
+                }
+                else if (path == "/native/drivefile")
+                {
+                    d = e.GetDeferral();
+                    int id; int.TryParse(HttpUtility_Query(e.Request.Uri, "id"), out id);
+                    string name = "";
+                    byte[] b = await Task.Run(() => DriveWatch.Read(id, out name));
+                    string ext = Path.GetExtension(name).ToLowerInvariant();
+                    string type = ext == ".png" ? "image/png" : ext == ".bmp" ? "image/bmp" : (ext == ".jpg" || ext == ".jpeg") ? "image/jpeg" : ext == ".mov" ? "video/quicktime" : ext == ".avi" ? "video/x-msvideo" : "video/mp4";
+                    e.Response = b == null ? Resp(new byte[0], 404, "Not Found", "text/plain") : Resp(b, 200, "OK", type);
+                }
                 else if (path == "/native/state") e.Response = Resp(Encoding.UTF8.GetBytes(StateJson()), 200, "OK", "application/json");
                 else if (path == "/win-shim.js") e.Response = Resp(Encoding.UTF8.GetBytes(shim), 200, "OK", "text/javascript; charset=utf-8");
                 else if (path == "/" || path == "/index.html") e.Response = Resp(Encoding.UTF8.GetBytes(WebApp.Html()), 200, "OK", "text/html; charset=utf-8");
@@ -696,6 +804,12 @@ namespace MedicaMallScope
             }
             catch (Exception ex) { Paths.Log("request " + path + ": " + ex.Message); }
             finally { if (d != null) d.Complete(); }
+        }
+
+        static string HttpUtility_Query(string uri, string key)
+        {
+            var m = Regex.Match(uri, "[?&]" + key + "=([^&]*)");
+            return m.Success ? Uri.UnescapeDataString(m.Groups[1].Value) : "";
         }
 
         void Event(string evt)
@@ -710,6 +824,8 @@ namespace MedicaMallScope
 
         void Tick()
         {
+            // the device plugged in as a USB drive -> tell the exam screen (it asks before importing)
+            try { if (DriveWatch.Changed() && Visible) { Paths.Log("usb drive appeared"); Event("drive"); } } catch { }
             DsDevice dev = null;
             try { dev = ScopeCamera.Find(); } catch { }
             bool present = dev != null, arrived = present && !lastPresent;

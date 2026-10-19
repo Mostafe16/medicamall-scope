@@ -4,7 +4,9 @@
 (function () {
   var N = window.BesNative;
   if (!N) return;
-  var FAKE = 'besdata-usb-native', LABEL = 'BESDATA Endoscope (USB)';
+  var FAKE = 'besdata-usb-native';
+  /* "BESDATA Endoscope (USB) (vvvv:pppp)" – the USB id lets the exam screen tell the scope from the otoscope */
+  var LABEL = function () { var id = ''; try { id = N.deviceId ? String(N.deviceId() || '') : ''; } catch (e) {} return 'BESDATA Endoscope (USB)' + (id ? ' (' + id + ')' : ''); };
   var md = navigator.mediaDevices;
   var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
   var connected = function () { try { return N.isConnected(); } catch (e) { return false; } };
@@ -36,7 +38,7 @@
       var t = stream.getVideoTracks()[0];
       var st = { running: true, ended: false };
       var gs = t.getSettings ? t.getSettings.bind(t) : function () { return {}; };
-      try { Object.defineProperty(t, 'label', { get: function () { return LABEL; } }); } catch (e) {}
+      try { Object.defineProperty(t, 'label', { get: function () { return LABEL(); } }); } catch (e) {}
       try { Object.defineProperty(t, 'readyState', { get: function () { return st.ended ? 'ended' : 'live'; } }); } catch (e) {}
       t.getSettings = function () { return Object.assign({}, gs(), { deviceId: FAKE, width: c.width, height: c.height, frameRate: 30 }); };
       t.getCapabilities = function () { return {}; };
@@ -76,7 +78,7 @@
       var l = [];
       try { l = await _enum(); } catch (e) {}
       if (connected()) {
-        l = [{ deviceId: FAKE, groupId: 'besdata', kind: 'videoinput', label: LABEL, toJSON: function () { return this; } }].concat(Array.from(l));
+        l = [{ deviceId: FAKE, groupId: 'besdata', kind: 'videoinput', label: LABEL(), toJSON: function () { return this; } }].concat(Array.from(l));
       }
       return l;
     };
@@ -86,6 +88,7 @@
   var btnT = null;
   var clickId = function (id) { var b = document.getElementById(id); if (b && !b.disabled) b.click(); };
   var onButton = function () {
+    if (window.__devButton) { window.__devButton(); return; } // exam screen decides (when it supports it): photo or start/stop video
     if (btnT) { clearTimeout(btnT); btnT = null; clickId('btnRec'); return; }
     btnT = setTimeout(function () { btnT = null; clickId('btnSnap'); }, 400);
   };

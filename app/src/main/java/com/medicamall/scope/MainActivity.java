@@ -73,6 +73,7 @@ public class MainActivity extends Activity {
     // ---- UVC camera ----
     private ICameraHelper cam;
     private volatile boolean camOpen = false;
+    private volatile String devId = ""; // "vvvv:pppp" of the open UVC device (tells the web screen scope vs otoscope)
     private boolean resized = false;
     private Size bestSize = null;
     private final Object frameLock = new Object();
@@ -149,7 +150,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPermissionRequest(PermissionRequest request) {
                 ui.post(() -> {
-                    if (hasCameraPerm()) request.grant(request.getResources());
+                    if (hasCameraPerm() && !wantsMic(request)) request.grant(request.getResources());
                     else {
                         pendingWebPerm = request;
                         requestPerms();
@@ -210,6 +211,17 @@ public class MainActivity extends Activity {
         return checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
     }
 
+    private boolean hasMicPerm() {
+        return checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    // web page asks for the microphone (video recording with sound) and Android hasn't allowed it yet
+    private boolean wantsMic(PermissionRequest r) {
+        if (r == null || hasMicPerm()) return false;
+        for (String s : r.getResources()) if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(s)) return true;
+        return false;
+    }
+
     private boolean needsLegacyWrite() {
         return Build.VERSION.SDK_INT < 29
                 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED;
@@ -218,6 +230,7 @@ public class MainActivity extends Activity {
     private void requestPerms() {
         List<String> p = new ArrayList<>();
         if (!hasCameraPerm()) p.add(Manifest.permission.CAMERA);
+        if (wantsMic(pendingWebPerm)) p.add(Manifest.permission.RECORD_AUDIO);
         if (needsLegacyWrite()) p.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
         if (!p.isEmpty()) requestPermissions(p.toArray(new String[0]), REQ_PERMS);
     }
@@ -291,6 +304,7 @@ public class MainActivity extends Activity {
 
             @Override
             public void onCameraOpen(UsbDevice device) {
+                try { devId = String.format(java.util.Locale.US, "%04x:%04x", device.getVendorId(), device.getProductId()); } catch (Throwable ignored) { devId = ""; }
                 try {
                     if (!resized) {
                         resized = true;
@@ -492,6 +506,9 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public String version() { return "android-1"; }
+
+        @JavascriptInterface
+        public String deviceId() { return camOpen ? devId : ""; }
 
         @JavascriptInterface
         public void fileBegin(String id, String name, String mime) {

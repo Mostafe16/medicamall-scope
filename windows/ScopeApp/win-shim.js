@@ -4,7 +4,9 @@
 (function () {
   var W = window.chrome && window.chrome.webview;
   if (!W) return;
-  var FAKE = 'besdata-usb-native', LABEL = 'BESDATA Endoscope (USB)', SCOPE_RE = /besdata|endoscope/i;
+  var FAKE = 'besdata-usb-native', SCOPE_RE = /besdata|endoscope/i, OTO_RE = /1224:2825/i;
+  /* label of the device the app holds natively – the otoscope keeps its USB id so the exam screen can pick its mode */
+  var LABEL = function () { return S.kind === 'oto' ? 'USB Otoscope (1224:2825)' : 'BESDATA Endoscope (USB)'; };
   var md = navigator.mediaDevices;
   var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 
@@ -39,7 +41,7 @@
       var t = stream.getVideoTracks()[0];
       var st = { running: true, ended: false };
       var gs = t.getSettings ? t.getSettings.bind(t) : function () { return {}; };
-      try { Object.defineProperty(t, 'label', { get: function () { return LABEL; } }); } catch (e) {}
+      try { Object.defineProperty(t, 'label', { get: function () { return LABEL(); } }); } catch (e) {}
       try { Object.defineProperty(t, 'readyState', { get: function () { return st.ended ? 'ended' : 'live'; } }); } catch (e) {}
       t.getSettings = function () { return Object.assign({}, gs(), { deviceId: FAKE, width: c.width, height: c.height, frameRate: 30 }); };
       t.getCapabilities = function () { return {}; };
@@ -80,8 +82,9 @@
       try { l = Array.from(await _enum()); } catch (e) {}
       if (connected()) {
         // the app holds the scope itself – hide Windows' own entry for it and offer the native one first
-        l = l.filter(function (d) { return !(d.kind === 'videoinput' && SCOPE_RE.test(d.label || '')); });
-        l = [{ deviceId: FAKE, groupId: 'besdata', kind: 'videoinput', label: LABEL, toJSON: function () { return this; } }].concat(l);
+        var held = S.kind === 'oto' ? OTO_RE : SCOPE_RE;
+        l = l.filter(function (d) { return !(d.kind === 'videoinput' && held.test(d.label || '')); });
+        l = [{ deviceId: FAKE, groupId: 'besdata', kind: 'videoinput', label: LABEL(), toJSON: function () { return this; } }].concat(l);
       }
       return l;
     };
@@ -139,8 +142,11 @@
     bar.querySelectorAll('button').forEach(function (b) { b.onclick = function () { setMode(b.getAttribute('data-m')); }; });
     document.body.appendChild(bar); paintMode();
   };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', addModeBar, { once: true }); else addModeBar();
+  /* the exam screen may bring its own device-button selector (#devBtnSeg) – then the floating bar isn't needed */
+  var maybeBar = function () { if (!document.getElementById('devBtnSeg')) addModeBar(); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', maybeBar, { once: true }); else maybeBar();
   var onButton = function () {
+    if (window.__devButton) { log('button -> exam screen'); window.__devButton(); return; }
     if (mode === 'video') {
       var wasRec = /إيقاف/.test(recBtnText());
       log('button -> ' + (wasRec ? 'stop' : 'start') + ' video');
@@ -171,6 +177,7 @@
   /* events from the Windows app */
   window.__besNative = function (evt) {
     if (evt === 'button') { onButton(); return; }
+    if (evt === 'drive') { if (window.__deviceDrive) window.__deviceDrive(); return; }
     if (evt === 'webupdate') { showUpdateBar(); return; }
     if ((evt === 'detached' || evt === 'closed') && active) active.end();
     try { md && md.dispatchEvent(new Event('devicechange')); } catch (e) {}

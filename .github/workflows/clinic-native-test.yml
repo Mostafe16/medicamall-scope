@@ -1,0 +1,78 @@
+name: Test build - clinic features (Android + Windows)
+
+# Test only: builds the واجهة 2 Android variant and the Windows app from feature/clinic-native
+# and uploads them as workflow artifacts. Nothing is published: production (app / win-app)
+# and the wajha-2 release are never touched.
+on:
+  push:
+    branches: [feature/clinic-native]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clinic-native-test
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    env:
+      MM_VARIANT: wajha2
+      WEB_URL: ${{ vars.WAJHA2_WEB_URL || 'https://medicamall.com/ent-scope' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Previous production APK (fallback if the site is unreachable)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download app -p MedicaMall-Scope.apk -O /tmp/prev.apk || true
+      - name: Pull exam screen
+        run: python3 tools/prepare_web.py
+      - name: Build APK
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASS }}
+        run: |
+          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > /tmp/release.jks; export KS_FILE=/tmp/release.jks; fi
+          gradle assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk MedicaMall-Scope-Wajha2-ClinicNative.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Android-Wajha2-ClinicNative
+          path: MedicaMall-Scope-Wajha2-ClinicNative.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Bundle exam screen + icon
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pip install --quiet pillow
+          gh release download app -p MedicaMall-Scope.apk -O prev.apk --clobber || echo "no previous APK"
+          python windows/ScopeApp/prepare_web.py
+      - name: Build
+        run: dotnet build windows/ScopeApp/ScopeApp.csproj -c Release -o out -p:Version=1.0.${{ github.run_number }}
+      - name: Package
+        shell: pwsh
+        run: |
+          Remove-Item out\*.pdb -ErrorAction SilentlyContinue
+          if (!(Test-Path out\MedicaMallScope.exe)) { throw "exe missing" }
+          Compress-Archive -Path out\* -DestinationPath MedicaMallScope-ClinicNative-Test.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Windows-ClinicNative-Test
+          path: MedicaMallScope-ClinicNative-Test.zip
