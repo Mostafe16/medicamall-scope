@@ -56,7 +56,9 @@ jobs:
         run: |
           pip install --quiet pillow
           python windows/ScopeApp/prepare_web.py
-          cmp web/index.html windows/ScopeApp/web/index.html && echo "bundled screen identical to repo copy"
+          # the checkout on Windows has CRLF; compare with the blob GitHub serves (LF)
+          git cat-file -p HEAD:web/index.html > repo-screen.html
+          cmp repo-screen.html windows/ScopeApp/web/index.html && echo "bundled screen byte-identical to the GitHub copy"
       - name: Build
         run: dotnet build windows/ScopeApp/ScopeApp.csproj -c Release -o out -p:Version=1.0.${{ github.run_number }}
       - name: Package
