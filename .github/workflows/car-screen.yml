@@ -1,0 +1,74 @@
+name: Build car-screen edition (test APK)
+
+# Android car head-unit edition of the scope app. Production (`app` release, main) is never touched:
+# own package (com.medicamall.scope.car), own data, own pre-release `car-test`, own update channel.
+# The exam screen itself is the same one production uses (web/index.html on main, updated in-app).
+on:
+  push:
+    branches: [test/car-screen]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: car-screen
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Bundle exam screen (web/index.html from the repo)
+        run: python3 tools/prepare_web.py
+
+      - name: Build APK
+        env:
+          MM_VARIANT: car
+          KS_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASS }}
+        run: |
+          if [ -n "$KS_B64" ]; then echo "$KS_B64" | base64 -d > /tmp/release.jks; export KS_FILE=/tmp/release.jks; else echo "::warning::Release signing secret unavailable; using debug signing."; fi
+          gradle assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk MedicaMall-Scope-Car.apk
+
+      - name: Check APK (package + 32-bit UVC libs)
+        run: |
+          AAPT=$(ls $ANDROID_HOME/build-tools/*/aapt | tail -1)
+          $AAPT dump badging MedicaMall-Scope-Car.apk | grep -E "^package|application-label:"
+          $AAPT dump badging MedicaMall-Scope-Car.apk | grep -q "name='com.medicamall.scope.car'" || { echo "wrong package"; exit 1; }
+          for so in libUVCCamera.so libuvc.so libusb1.0.so libjpeg-turbo212.so libyuv.so; do
+            unzip -l MedicaMall-Scope-Car.apk | grep -q "lib/armeabi-v7a/$so" || { echo "missing armeabi-v7a/$so"; exit 1; }
+          done
+          unzip -l MedicaMall-Scope-Car.apk | grep "lib/" | awk '{print $4}'
+          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"url\": \"https://github.com/${GITHUB_REPOSITORY}/releases/download/car-test/MedicaMall-Scope-Car.apk\"}" > version.json
+          cat version.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MedicaMall-Scope-Car
+          path: MedicaMall-Scope-Car.apk
+
+      - name: Publish isolated pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view car-test >/dev/null 2>&1; then
+            gh release upload car-test MedicaMall-Scope-Car.apk version.json --clobber
+          else
+            gh release create car-test MedicaMall-Scope-Car.apk version.json \
+              --title "Medica Mall Scope - Car screen (Test)" \
+              --notes "Android car head-unit edition. Installs next to the production app with its own data; production users are not affected." \
+              --prerelease --latest=false --target "${GITHUB_SHA}"
+          fi

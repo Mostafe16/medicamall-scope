@@ -7,6 +7,8 @@ def ksFile = System.getenv('KS_FILE')
 // MM_VARIANT=wajha2 builds "واجهة 2": a side-by-side test copy (own package, own data, own update channel).
 // Unset = the production app, unchanged.
 def wajha2 = System.getenv('MM_VARIANT') == 'wajha2'
+// MM_VARIANT=car builds the Android car head-unit edition (own package, own data, own update channel `car-test`).
+def car = System.getenv('MM_VARIANT') == 'car'
 // exam screen source: web/index.html in this public repo (served raw by GitHub). WEB_URL can override (e.g. واجهة 2 test builds).
 def webUrl = System.getenv('WEB_URL') ?: 'https://raw.githubusercontent.com/Mostafe16/medicamall-scope/main/web/index.html'
 
@@ -15,16 +17,19 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId wajha2 ? 'com.medicamall.scope.wajha2' : 'com.medicamall.scope'
+        applicationId car ? 'com.medicamall.scope.car' : (wajha2 ? 'com.medicamall.scope.wajha2' : 'com.medicamall.scope')
         minSdk 24
+        // car head units: 32-bit MediaTek (e.g. MT6580) – make sure the 32-bit UVC libs are always packed
+        if (car) ndk { abiFilters 'armeabi-v7a', 'arm64-v8a' }
         // 33 on purpose: avoids Android 14 receiver-export crashes inside the UVC library
         targetSdk 33
         versionCode runNo
-        versionName wajha2 ? "wajha2.${runNo}" : "1.0.${runNo}"
-        resValue 'string', 'app_name', wajha2 ? 'Medica Mall Scope واجهة 2' : 'Medica Mall Scope'
+        versionName car ? "car.${runNo}" : (wajha2 ? "wajha2.${runNo}" : "1.0.${runNo}")
+        resValue 'string', 'app_name', car ? 'Medica Mall Scope Car' : (wajha2 ? 'Medica Mall Scope واجهة 2' : 'Medica Mall Scope')
         buildConfigField 'String', 'WEB_URL', "\"${webUrl}\""
-        buildConfigField 'String', 'RELEASE_TAG', wajha2 ? '"wajha-2"' : '"app"'
-        buildConfigField 'String', 'APK_NAME', wajha2 ? '"MedicaMall-Scope-Wajha2.apk"' : '"MedicaMall-Scope.apk"'
+        buildConfigField 'String', 'RELEASE_TAG', car ? '"car-test"' : (wajha2 ? '"wajha-2"' : '"app"')
+        buildConfigField 'String', 'APK_NAME', car ? '"MedicaMall-Scope-Car.apk"' : (wajha2 ? '"MedicaMall-Scope-Wajha2.apk"' : '"MedicaMall-Scope.apk"')
+        buildConfigField 'boolean', 'CAR', car ? 'true' : 'false'
     }
 
     buildFeatures { buildConfig true }

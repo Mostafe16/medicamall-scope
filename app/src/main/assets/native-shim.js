@@ -74,8 +74,11 @@
     };
 
     md.getUserMedia = function (c) { return wantsNative(c) ? nativeStream() : _gum(c); };
+    var lastRescan = 0;
     md.enumerateDevices = async function () {
       var l = [];
+      /* scope not open yet: ask Android to look for it again (the "↻ الكاميرات" button lands here) */
+      if (!connected() && N.rescan && Date.now() - lastRescan > 3000) { lastRescan = Date.now(); try { N.rescan(); } catch (e) {} }
       try { l = await _enum(); } catch (e) {}
       if (connected()) {
         l = [{ deviceId: FAKE, groupId: 'besdata', kind: 'videoinput', label: LABEL(), toJSON: function () { return this; } }].concat(Array.from(l));

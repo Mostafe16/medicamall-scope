@@ -81,6 +81,10 @@ public class MainActivity extends Activity {
     private int fw = 1280, fh = 720;
     private long seq = 0, served = 0;
     private long lastButton = 0;
+    // ---- car head-unit edition: try smaller sizes when the scope opens but sends no frames ----
+    private int sizeTry = 0;
+    private Runnable openWatch;
+    private long lastNoUsbToast = 0;
 
     // ---- web helpers ----
     private PermissionRequest pendingWebPerm;
@@ -138,6 +142,11 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onPageFinished(WebView v, String url) {
+                if (BuildConfig.CAR) v.evaluateJavascript(CAR_CSS_JS, null);
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
                 if (HOST.equals(u.getHost())) return false;
@@ -189,6 +198,7 @@ public class MainActivity extends Activity {
                 ((FrameLayout) getWindow().getDecorView()).removeView(customView);
                 customView = null;
                 getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                if (BuildConfig.CAR) goFull();
                 if (customCb != null) customCb.onCustomViewHidden();
                 customCb = null;
             }
@@ -262,6 +272,24 @@ public class MainActivity extends Activity {
                 || z.type == UVCCamera.FRAME_FORMAT_MJPEG;
     }
 
+    /** Car head units (weak 32-bit MediaTek, limited USB bandwidth): sizes to try in order, biggest MJPEG ≤720p first. */
+    private List<Size> carSizes() {
+        List<Size> list = null, out = new ArrayList<>();
+        try { list = cam.getSupportedSizeList(); } catch (Throwable ignored) { }
+        if (list == null) return out;
+        List<Size> mj = new ArrayList<>(), other = new ArrayList<>();
+        for (Size z : list) {
+            if (isMjpeg(z) && z.width * z.height <= 1280 * 720) mj.add(z);
+            else if (!isMjpeg(z) && z.width * z.height <= 640 * 480) other.add(z);
+        }
+        java.util.Comparator<Size> big = (a, b) -> Integer.compare(b.width * b.height, a.width * a.height);
+        java.util.Collections.sort(mj, big);
+        java.util.Collections.sort(other, big);
+        for (Size z : mj) { boolean dup = false; for (Size o : out) if (o.width == z.width && o.height == z.height) dup = true; if (!dup) out.add(z); }
+        for (Size z : other) { boolean dup = false; for (Size o : out) if (o.width == z.width && o.height == z.height) dup = true; if (!dup) out.add(z); }
+        return out;
+    }
+
     private Size pickSize() {
         List<Size> list = null;
         try { list = cam.getSupportedSizeList(); } catch (Throwable ignored) { }
@@ -286,11 +314,16 @@ public class MainActivity extends Activity {
         cam.setStateCallback(new ICameraHelper.StateCallback() {
             @Override
             public void onAttach(UsbDevice device) {
+                if (BuildConfig.CAR) {
+                    if (isUvc(device)) status("لقيت المنظار (" + usbId(device) + ") – بفتحه…");
+                    else status("اتوصل جهاز USB مش كاميرا (" + usbId(device) + ")");
+                }
                 if (!camOpen && isUvc(device)) cam.selectDevice(device);
             }
 
             @Override
             public void onDeviceOpen(UsbDevice device, boolean isFirstOpen) {
+                if (BuildConfig.CAR) { carOpen(device); return; }
                 bestSize = pickSize();
                 resized = bestSize != null;
                 try {
@@ -306,7 +339,7 @@ public class MainActivity extends Activity {
             public void onCameraOpen(UsbDevice device) {
                 try { devId = String.format(java.util.Locale.US, "%04x:%04x", device.getVendorId(), device.getProductId()); } catch (Throwable ignored) { devId = ""; }
                 try {
-                    if (!resized) {
+                    if (!resized && !BuildConfig.CAR) {
                         resized = true;
                         Size b = pickSize();
                         if (b != null) cam.setPreviewSize(b);
@@ -337,23 +370,77 @@ public class MainActivity extends Activity {
             @Override
             public void onDetach(UsbDevice device) {
                 camOpen = false;
+                sizeTry = 0;
+                if (openWatch != null) ui.removeCallbacks(openWatch);
                 js("detached");
             }
 
             @Override
             public void onCancel(UsbDevice device) {
+                if (BuildConfig.CAR) status("صلاحية USB اترفضت – اضغط «↻ الكاميرات» ووافق على الرسالة");
                 js("cancel");
             }
         });
     }
 
-    private void openFirstUvc() {
+    private void carOpen(UsbDevice device) {
+        List<Size> c = carSizes();
+        Size z = sizeTry < c.size() ? c.get(sizeTry) : null;
+        bestSize = z;
+        resized = true;
+        try {
+            if (z != null) cam.openCamera(z);
+            else cam.openCamera();
+        } catch (Throwable t) {
+            try { cam.openCamera(); } catch (Throwable ignored) { }
+        }
+        if (sizeTry > 0) status("بجرب دقة أقل: " + (z != null ? z.width + "x" + z.height : "الافتراضية"));
+        final long seqAtOpen = seq;
+        final int tries = c.size();
+        if (openWatch != null) ui.removeCallbacks(openWatch);
+        openWatch = () -> {
+            if (seq != seqAtOpen) return;                 // frames are coming – all good
+            if (sizeTry >= tries) {                       // tried every size, then the default
+                status("المنظار اتعرف بس مش بيبعت صورة. جرّب كابل/بورت USB تاني أو hub بباور");
+                return;
+            }
+            sizeTry++;
+            camOpen = false;
+            try { cam.closeCamera(); } catch (Throwable ignored) { }
+            ui.postDelayed(() -> { if (!camOpen && cam != null) cam.selectDevice(device); }, 900);
+        };
+        ui.postDelayed(openWatch, 5000);
+    }
+
+    private static String usbId(UsbDevice d) {
+        try { return String.format(java.util.Locale.US, "%04x:%04x", d.getVendorId(), d.getProductId()); } catch (Throwable t) { return "?"; }
+    }
+
+    private void status(String msg) {
+        ui.post(() -> Toast.makeText(this, msg, Toast.LENGTH_LONG).show());
+    }
+
+    private void openFirstUvc() { openFirstUvc(false); }
+
+    private void openFirstUvc(boolean manual) {
         if (cam == null || camOpen) return;
         try {
             List<UsbDevice> list = cam.getDeviceList();
-            if (list == null) return;
+            if (list == null) list = new ArrayList<>();
             for (UsbDevice d : list) {
                 if (isUvc(d)) { cam.selectDevice(d); return; }
+            }
+            if (BuildConfig.CAR) {
+                // nothing that looks like a camera: say what the head unit does see (helps pick the right port/cable)
+                long now = SystemClock.uptimeMillis();
+                if (!manual && now - lastNoUsbToast < 15000) return;
+                lastNoUsbToast = now;
+                if (list.isEmpty()) status("الشاشة مش شايفة أي جهاز USB – جرّب كابل USB تاني من الشاشة");
+                else {
+                    StringBuilder b = new StringBuilder();
+                    for (UsbDevice d : list) b.append(b.length() > 0 ? "، " : "").append(usbId(d));
+                    status("أجهزة USB موجودة بس مفيش كاميرا: " + b);
+                }
             }
         } catch (Throwable ignored) { }
     }
@@ -607,6 +694,9 @@ public class MainActivity extends Activity {
         public void openExternal(String url) { MainActivity.this.openExternal(url); }
 
         @JavascriptInterface
+        public void rescan() { ui.post(() -> { if (!camOpen) { sizeTry = 0; openFirstUvc(true); } }); }
+
+        @JavascriptInterface
         public void reloadWeb() { ui.post(() -> web.reload()); }
 
         @JavascriptInterface
@@ -635,8 +725,33 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (BuildConfig.CAR) goFull();
         Updates.onResume(this);
     }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && BuildConfig.CAR && customView == null) goFull();
+    }
+
+    /** Car screen: hide the head unit's status + navigation bars (swipe from the edge shows them for a moment). */
+    @SuppressWarnings("deprecation")
+    private void goFull() {
+        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+    }
+
+    // Car screen (~1024x600 landscape): tighter header/padding so the live view, photo and record buttons fit on one screen.
+    static final String CAR_CSS_JS = "(function(){if(document.getElementById('mmCar'))return;var s=document.createElement('style');s.id='mmCar';"
+            + "s.textContent='@media (min-width:800px) and (max-height:720px){"
+            + "header{padding:4px 12px!important}header .logo{width:38px!important;height:38px!important}header h1{font-size:15px!important}header small{font-size:11px!important}"
+            + "main{padding:8px!important;gap:8px!important;grid-template-columns:minmax(0,1fr) 300px!important}"
+            + ".card{padding:8px!important}.stage{max-height:calc(100vh - 140px)!important}"
+            + ".toolbar{margin-top:6px!important;gap:6px!important}.big{padding:12px 26px!important;font-size:19px!important;min-height:54px}"
+            + "}';(document.head||document.documentElement).appendChild(s);})();";
 
     @Override
     protected void onDestroy() {
