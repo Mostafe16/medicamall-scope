@@ -302,8 +302,8 @@ public class MainActivity extends Activity {
         if (list == null) return out;
         List<Size> mj = new ArrayList<>(), other = new ArrayList<>();
         for (Size z : list) {
-            // 720p MJPEG for sharp photos; the live view is sent to the screen at half size (see frameResponse)
-            if (isMjpeg(z) && z.width * z.height <= 1280 * 720) mj.add(z);
+            // 640x480 MJPEG: 720p made the live view lag on the MT6580 head unit (tested 2026-10-29)
+            if (isMjpeg(z) && z.width * z.height <= 640 * 480) mj.add(z);
             else if (!isMjpeg(z) && z.width * z.height <= 640 * 480) other.add(z);
         }
         java.util.Comparator<Size> big = (a, b) -> Integer.compare(b.width * b.height, a.width * a.height);
@@ -786,6 +786,16 @@ public class MainActivity extends Activity {
         public void rescan() { ui.post(() -> { if (!camOpen) { sizeTry = 0; openFirstUvc(true); } }); }
 
         @JavascriptInterface
+        public void logoProbe() {
+            if (!BuildConfig.CAR) return;
+            ui.post(() -> {
+                if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)
+                    requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, 9);
+                LogoProbe.run(MainActivity.this);
+            });
+        }
+
+        @JavascriptInterface
         public void reloadWeb() { ui.post(() -> web.reload()); }
 
         @JavascriptInterface
@@ -848,6 +858,7 @@ public class MainActivity extends Activity {
                 + "m.content='width=1024, user-scalable=no';"
                 + "if(!document.getElementById('mmCar')){var s=document.createElement('style');s.id='mmCar';s.textContent=CSS;h.appendChild(s);}"
                 + "var t=document.getElementById('toolsBox');if(t&&!t.dataset.car){t.dataset.car='1';t.removeAttribute('open');t.addEventListener('toggle',function(){if(t.open)setTimeout(function(){t.scrollIntoView(false)},60)});}"
+                + "var ds=document.getElementById('dlgSettings');if(ds&&!document.getElementById('mmProbe')){var pb=document.createElement('button');pb.id='mmProbe';pb.className='ghost';pb.type='button';pb.textContent='🛠 تشخيص لوجو التشغيل';pb.style.margin='12px 0';pb.onclick=function(){try{BesNative.logoProbe()}catch(x){}};(ds.querySelector('.dlg-b')||ds).appendChild(pb);}"
                 + "document.documentElement.classList.add('mmcar');};"
                 // on-screen keyboard covers the bottom half of a 600px screen: while typing in a popup, shrink it to the top
                 + "var isField=function(e){return e&&e.matches&&e.matches('input:not([type=range]):not([type=file]):not([type=checkbox]):not([type=radio]),textarea')&&e.closest&&e.closest('dialog');};"
