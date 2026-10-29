@@ -33,6 +33,16 @@ jobs:
       - name: Bundle exam screen (web/index.html from the repo)
         run: python3 tools/prepare_web.py
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Make exam screen work on old head-unit WebView (Chrome 58+ syntax)
+        run: |
+          npm install --no-save --prefix /tmp/lw esbuild@0.24.0
+          NODE_PATH=/tmp/lw/node_modules node tools/legacy_web.js
+          if grep -qE 'catch\s*\{' app/src/main/assets/index.html; then echo "optional catch binding left"; exit 1; fi
+
       - name: Build APK
         env:
           MM_VARIANT: car

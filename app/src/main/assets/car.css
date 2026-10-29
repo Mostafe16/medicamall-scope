@@ -34,3 +34,5 @@ dialog{width:min(560px,94vw)}.dlg-b{max-height:calc(100vh - 140px)!important}
 .side h2{white-space:nowrap;gap:6px}
 .side h2 button{white-space:nowrap;padding:4px 10px!important;min-height:30px!important;font-size:12px!important}
 .tools>summary{margin-top:6px!important;padding:6px 14px!important}
+@supports not (inset:0){.stage video,.stage canvas.freeze,.placeholder,.flash{top:0;right:0;bottom:0;left:0}}
+@supports not (aspect-ratio:1){.item{height:96px}.mainbtns button{margin:0 4px}.toolbar>*,.actions>*,.chips>*{margin:3px}}

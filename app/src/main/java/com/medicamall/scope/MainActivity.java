@@ -144,7 +144,7 @@ public class MainActivity extends Activity {
                 }
                 if (HOST.equals(u.getHost()) && "/assets/index.html".equals(u.getPath())) {
                     File wf = Updates.webFile(MainActivity.this);
-                    if (wf.exists()) {
+                    if (wf.exists() && !BuildConfig.CAR) {
                         try {
                             Map<String, String> hd = new HashMap<>();
                             hd.put("Cache-Control", "no-cache");
@@ -226,7 +226,15 @@ public class MainActivity extends Activity {
         initCam();
         handleUsbIntent(getIntent());
         ui.postDelayed(this::openFirstUvc, 1200);
-        Updates.checkWeb(this, () -> js("webupdate"));
+        // car build bundles an old-WebView-compatible copy of the screen; the live (modern JS) one would break it
+        if (!BuildConfig.CAR) Updates.checkWeb(this, () -> js("webupdate"));
+        else {
+            try { Updates.webFile(this).delete(); } catch (Throwable ignored) { }
+            try {
+                android.content.pm.PackageInfo wv = androidx.webkit.WebViewCompat.getCurrentWebViewPackage(this);
+                if (wv != null) status("WebView " + wv.versionName + " · Android SDK " + Build.VERSION.SDK_INT);
+            } catch (Throwable ignored) { }
+        }
         Updates.checkApp(this);
     }
 
@@ -293,8 +301,9 @@ public class MainActivity extends Activity {
         if (list == null) return out;
         List<Size> mj = new ArrayList<>(), other = new ArrayList<>();
         for (Size z : list) {
-            if (isMjpeg(z) && z.width * z.height <= 1280 * 720) mj.add(z);
+            if (isMjpeg(z) && z.width * z.height <= 640 * 480) mj.add(z);
             else if (!isMjpeg(z) && z.width * z.height <= 640 * 480) other.add(z);
+            else if (isMjpeg(z) && z.width * z.height <= 1280 * 720) other.add(z);
         }
         java.util.Comparator<Size> big = (a, b) -> Integer.compare(b.width * b.height, a.width * a.height);
         java.util.Collections.sort(mj, big);
@@ -509,7 +518,7 @@ public class MainActivity extends Activity {
         try {
             YuvImage yi = new YuvImage(work, ImageFormat.NV21, w, h, null);
             ByteArrayOutputStream bos = new ByteArrayOutputStream(w * h / 4);
-            yi.compressToJpeg(new Rect(0, 0, w, h), 88, bos);
+            yi.compressToJpeg(new Rect(0, 0, w, h), BuildConfig.CAR ? 80 : 88, bos);
             Map<String, String> hd = new HashMap<>();
             hd.put("Cache-Control", "no-store");
             hd.put("Access-Control-Allow-Origin", "*");
@@ -767,6 +776,7 @@ public class MainActivity extends Activity {
         try { css = new String(Updates.read(getAssets().open("car.css")), java.nio.charset.StandardCharsets.UTF_8); } catch (Exception ignored) { }
         css = css.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", " ");
         return "(function(){if(window.__mmCar)return;window.__mmCar=1;var CSS='" + css + "';"
+                + "var ne=0;window.addEventListener('error',function(e){if(ne++<3&&window.BesNative)try{BesNative.toast('JS: '+(e.message||'error')+' @'+(e.lineno||''))}catch(x){}});"
                 + "var apply=function(){var h=document.head||document.documentElement;"
                 + "var m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';h.appendChild(m);}"
                 + "m.content='width=1024, user-scalable=no';"
