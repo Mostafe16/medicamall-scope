@@ -36,3 +36,7 @@ dialog{width:min(560px,94vw)}.dlg-b{max-height:calc(100vh - 140px)!important}
 .tools>summary{margin-top:6px!important;padding:6px 14px!important}
 @supports not (inset:0){.stage video,.stage canvas.freeze,.placeholder,.flash{top:0;right:0;bottom:0;left:0}}
 @supports not (aspect-ratio:1){.item{height:96px}.mainbtns button{margin:0 4px}.toolbar>*,.actions>*,.chips>*{margin:3px}}
+dialog{margin:6px auto auto!important;max-height:calc(100vh - 12px)!important}
+html.kb dialog .dlg-b{max-height:150px!important}
+html.kb dialog .dlg-h{padding:6px 14px!important}
+html.kb dialog .dlg-f{padding:6px 14px!important}

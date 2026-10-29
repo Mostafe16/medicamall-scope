@@ -140,6 +140,7 @@ public class MainActivity extends Activity {
             public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
                 if (HOST.equals(u.getHost()) && u.getPath() != null && u.getPath().startsWith("/uvc/")) {
+                    if (u.getPath().startsWith("/uvc/full")) return fullResponse();
                     return frameResponse();
                 }
                 if (HOST.equals(u.getHost()) && "/assets/index.html".equals(u.getPath())) {
@@ -301,9 +302,9 @@ public class MainActivity extends Activity {
         if (list == null) return out;
         List<Size> mj = new ArrayList<>(), other = new ArrayList<>();
         for (Size z : list) {
-            if (isMjpeg(z) && z.width * z.height <= 640 * 480) mj.add(z);
+            // 720p MJPEG for sharp photos; the live view is sent to the screen at half size (see frameResponse)
+            if (isMjpeg(z) && z.width * z.height <= 1280 * 720) mj.add(z);
             else if (!isMjpeg(z) && z.width * z.height <= 640 * 480) other.add(z);
-            else if (isMjpeg(z) && z.width * z.height <= 1280 * 720) other.add(z);
         }
         java.util.Comparator<Size> big = (a, b) -> Integer.compare(b.width * b.height, a.width * a.height);
         java.util.Collections.sort(mj, big);
@@ -515,6 +516,12 @@ public class MainActivity extends Activity {
             System.arraycopy(frame, 0, work, 0, frame.length);
             w = fw; h = fh; served = seq;
         }
+        if (BuildConfig.CAR && w > 800 && w % 4 == 0 && h % 4 == 0) {   // car: half-size live view (fast on weak CPUs)
+            int w2 = w / 2, h2 = h / 2;
+            if (half == null || half.length != w2 * h2 * 3 / 2) half = new byte[w2 * h2 * 3 / 2];
+            halfNv21(work, w, h, half);
+            return jpeg(half, w2, h2, 80);
+        }
         try {
             YuvImage yi = new YuvImage(work, ImageFormat.NV21, w, h, null);
             ByteArrayOutputStream bos = new ByteArrayOutputStream(w * h / 4);
@@ -526,6 +533,48 @@ public class MainActivity extends Activity {
         } catch (Throwable t) {
             return empty();
         }
+    }
+
+    private byte[] half, fullWork;
+
+    /** NV21 → NV21 at half width/height (drop every other pixel / chroma pair). */
+    private static void halfNv21(byte[] src, int w, int h, byte[] dst) {
+        int w2 = w / 2, h2 = h / 2, i = 0;
+        for (int y = 0; y < h2; y++) {
+            int r = 2 * y * w;
+            for (int x = 0; x < w2; x++) dst[i++] = src[r + 2 * x];
+        }
+        int so = w * h;
+        for (int y = 0; y < h2 / 2; y++) {
+            int r = so + 2 * y * w;
+            for (int x = 0; x < w2 / 2; x++) { dst[i++] = src[r + 4 * x]; dst[i++] = src[r + 4 * x + 1]; }
+        }
+    }
+
+    private WebResourceResponse jpeg(byte[] nv21, int w, int h, int q) {
+        try {
+            YuvImage yi = new YuvImage(nv21, ImageFormat.NV21, w, h, null);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream(w * h / 4);
+            yi.compressToJpeg(new Rect(0, 0, w, h), q, bos);
+            Map<String, String> hd = new HashMap<>();
+            hd.put("Cache-Control", "no-store");
+            hd.put("Access-Control-Allow-Origin", "*");
+            return new WebResourceResponse("image/jpeg", null, 200, "OK", hd, new ByteArrayInputStream(bos.toByteArray()));
+        } catch (Throwable t) {
+            return empty();
+        }
+    }
+
+    /** Latest frame at the camera's full size (used for photos while the live view runs at half size). */
+    private WebResourceResponse fullResponse() {
+        int w, h;
+        synchronized (frameLock) {
+            if (frame == null) return empty();
+            if (fullWork == null || fullWork.length != frame.length) fullWork = new byte[frame.length];
+            System.arraycopy(frame, 0, fullWork, 0, frame.length);
+            w = fw; h = fh;
+        }
+        return jpeg(fullWork, w, h, 92);
     }
 
     private WebResourceResponse empty() {
@@ -611,6 +660,10 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public boolean isConnected() { return camOpen; }
 
+        /** "WxH" of the camera when the live view is downscaled (photos should use /uvc/full.jpg), else "". */
+        @JavascriptInterface
+        public String fullSize() { synchronized (frameLock) { return (BuildConfig.CAR && camOpen && fw > 800) ? fw + "x" + fh : ""; } }
+
         @JavascriptInterface
         public String frameSize() { synchronized (frameLock) { return fw + "x" + fh; } }
 
@@ -666,6 +719,19 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface
         public void shareFiles(String idsCsv, String title) {
+            if (BuildConfig.CAR) {
+                List<File> fs = new ArrayList<>(); List<String> ms = new ArrayList<>();
+                for (String id : idsCsv.split(",")) {
+                    File f; String mime;
+                    synchronized (outFiles) { f = outFiles.get(id); mime = outMime.get(id); }
+                    if (f != null) { fs.add(f); ms.add(mime); }
+                }
+                if (!fs.isEmpty()) { ui.post(() -> LocalShare.show(MainActivity.this, fs, ms, title, () -> chooserShare(idsCsv, title))); return; }
+            }
+            chooserShare(idsCsv, title);
+        }
+
+        void chooserShare(String idsCsv, String title) {
             ArrayList<Uri> uris = new ArrayList<>();
             String type = null;
             for (String id : idsCsv.split(",")) {
@@ -783,6 +849,10 @@ public class MainActivity extends Activity {
                 + "if(!document.getElementById('mmCar')){var s=document.createElement('style');s.id='mmCar';s.textContent=CSS;h.appendChild(s);}"
                 + "var t=document.getElementById('toolsBox');if(t&&!t.dataset.car){t.dataset.car='1';t.removeAttribute('open');t.addEventListener('toggle',function(){if(t.open)setTimeout(function(){t.scrollIntoView(false)},60)});}"
                 + "document.documentElement.classList.add('mmcar');};"
+                // on-screen keyboard covers the bottom half of a 600px screen: while typing in a popup, shrink it to the top
+                + "var isField=function(e){return e&&e.matches&&e.matches('input:not([type=range]):not([type=file]):not([type=checkbox]):not([type=radio]),textarea')&&e.closest&&e.closest('dialog');};"
+                + "document.addEventListener('focusin',function(e){if(isField(e.target)){document.documentElement.classList.add('kb');setTimeout(function(){try{e.target.scrollIntoView({block:'center'})}catch(x){}},250);}},true);"
+                + "document.addEventListener('focusout',function(e){if(isField(e.target))setTimeout(function(){if(!isField(document.activeElement))document.documentElement.classList.remove('kb');},150);},true);"
                 + "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',apply);else apply();})();";
     }
 

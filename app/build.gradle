@@ -30,6 +30,8 @@ android {
         buildConfigField 'String', 'RELEASE_TAG', car ? '"car-test"' : (wajha2 ? '"wajha-2"' : '"app"')
         buildConfigField 'String', 'APK_NAME', car ? '"MedicaMall-Scope-Car.apk"' : (wajha2 ? '"MedicaMall-Scope-Wajha2.apk"' : '"MedicaMall-Scope.apk"')
         buildConfigField 'boolean', 'CAR', car ? 'true' : 'false'
+        // car edition only: open the app automatically when the head unit boots
+        manifestPlaceholders = [carOnly: car ? 'true' : 'false']
     }
 
     buildFeatures { buildConfig true }
@@ -73,4 +75,6 @@ dependencies {
     implementation 'com.herohan:UVCAndroid:1.0.13'
     implementation 'androidx.webkit:webkit:1.10.0'
     implementation 'androidx.core:core:1.12.0'
+    // QR code for sharing files from the car screen to a phone
+    implementation 'com.google.zxing:core:3.5.3'
 }

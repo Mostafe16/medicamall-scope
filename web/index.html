@@ -612,6 +612,8 @@ function freeze(){
   if (frozen){
     freezeCv.width = video.videoWidth; freezeCv.height = video.videoHeight;
     freezeCv.getContext('2d').drawImage(video, 0, 0);
+    /* sharper frozen frame (and photo) when the camera's full frame is available */
+    fullFrame().then(b => { if (!b) return; if (frozen){ freezeCv.width = b.width; freezeCv.height = b.height; freezeCv.getContext('2d').drawImage(b, 0, 0); } if (b.close) b.close(); });
     freezeCv.style.display = 'block'; video.style.visibility = 'hidden';
     $('btnFreeze').textContent = 'إلغاء التجميد'; toast('الصورة متجمدة');
   } else {
@@ -623,9 +625,20 @@ function freeze(){
 $('btnFreeze').onclick = freeze;
 
 /* ---------- capture ---------- */
+/* Android car screen: the live view runs at half size to stay smooth; photos take the camera's full frame */
+async function fullFrame(){
+  try {
+    if (!window.BesNative || !BesNative.fullSize || !BesNative.fullSize()) return null;
+    const r = await fetch('/uvc/full.jpg?t=' + Date.now(), {cache:'no-store'});
+    if (r.status !== 200) return null;
+    return await createImageBitmap(await r.blob());
+  } catch (e) { return null; }
+}
 async function snap(){
   if (!stream || !video.videoWidth){ toast('شغّل الكاميرا الأول'); return; }
-  const c = renderFrame(frozen ? freezeCv : video);
+  const full = frozen ? null : await fullFrame();
+  const c = renderFrame(full || (frozen ? freezeCv : video));
+  if (full && full.close) full.close();
   const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
   $('flash').classList.remove('go'); void $('flash').offsetWidth; $('flash').classList.add('go');
   shutter();
@@ -665,19 +678,28 @@ async function startRec(){
 async function startRecNow(){
   if (!window.MediaRecorder){ toast('المتصفح مش بيدعم تسجيل الفيديو'); return; }
   // record from a canvas so rotation / flip / filters are included
-  const cv = document.createElement('canvas');
-  const draw = () => {
+  // one canvas reused for every frame, 20 fps: much lighter on weak CPUs (Android TV boxes / car screens)
+  const cv = document.createElement('canvas'), cg = cv.getContext('2d');
+  const FPS = 20; let lastDraw = 0;
+  const draw = (now) => {
     if (!rec) return;
-    const f = renderFrame(video);
-    if (cv.width !== f.width){ cv.width = f.width; cv.height = f.height; }
-    cv.getContext('2d').drawImage(f, 0, 0);
     requestAnimationFrame(draw);
+    if (now && now - lastDraw < 1000 / FPS - 2) return;
+    lastDraw = now || performance.now();
+    const vw = video.videoWidth, vh = video.videoHeight; if (!vw) return;
+    const swap = rot % 180 !== 0, W = swap ? vh : vw, H = swap ? vw : vh;
+    if (cv.width !== W || cv.height !== H){ cv.width = W; cv.height = H; }
+    cg.setTransform(1, 0, 0, 1, 0, 0);
+    cg.filter = filterStr();
+    cg.translate(W/2, H/2); cg.rotate(rot*Math.PI/180);
+    const z = $('sZoom').value/100; cg.scale(flip?-z:z, flipV?-z:z);
+    cg.drawImage(video, -vw/2, -vh/2, vw, vh);
   };
-  const out = cv.captureStream(30);
+  const out = cv.captureStream(FPS);
   micStream = S.recAudio ? await getMic() : null;
   if (micStream) micStream.getAudioTracks().forEach(t => out.addTrack(t));
   recMime = pickMime(micStream ? 'audio' : ''); recChunks = [];
-  rec = new MediaRecorder(out, recMime ? {mimeType: recMime, videoBitsPerSecond: 6e6} : undefined);
+  rec = new MediaRecorder(out, recMime ? {mimeType: recMime, videoBitsPerSecond: 4e6} : undefined);
   rec.ondataavailable = e => e.data.size && recChunks.push(e.data);
   rec.onstop = async () => {
     const type = rec?.mimeType || recMime || 'video/webm';
