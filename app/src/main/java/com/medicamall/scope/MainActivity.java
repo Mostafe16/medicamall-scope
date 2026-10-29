@@ -781,7 +781,7 @@ public class MainActivity extends Activity {
                 + "var m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';h.appendChild(m);}"
                 + "m.content='width=1024, user-scalable=no';"
                 + "if(!document.getElementById('mmCar')){var s=document.createElement('style');s.id='mmCar';s.textContent=CSS;h.appendChild(s);}"
-                + "var t=document.getElementById('toolsBox');if(t&&!t.dataset.car){t.dataset.car='1';t.removeAttribute('open');}"
+                + "var t=document.getElementById('toolsBox');if(t&&!t.dataset.car){t.dataset.car='1';t.removeAttribute('open');t.addEventListener('toggle',function(){if(t.open)setTimeout(function(){t.scrollIntoView(false)},60)});}"
                 + "document.documentElement.classList.add('mmcar');};"
                 + "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',apply);else apply();})();";
     }

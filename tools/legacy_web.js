@@ -16,6 +16,17 @@ html = html.replace(/<script>([\s\S]*?)<\/script>/g, (all, code) => {
   return '<script>' + out.replace(/<\/script/gi, '<\\/script') + '</script>';
 });
 if (!n) { console.error('no inline scripts found'); process.exit(1); }
+// runtime APIs newer than old head-unit WebViews (only defined when missing)
+const POLY = `<script>(function(){
+var rd=function(b,how){return new Promise(function(res,rej){var f=new FileReader();f.onload=function(){res(f.result)};f.onerror=function(){rej(f.error)};f[how](b)})};
+if(window.Blob&&!Blob.prototype.arrayBuffer)Blob.prototype.arrayBuffer=function(){return rd(this,'readAsArrayBuffer')};
+if(window.Blob&&!Blob.prototype.text)Blob.prototype.text=function(){return rd(this,'readAsText')};
+if(!Array.prototype.flat)Array.prototype.flat=function(d){d=d===undefined?1:d;return this.reduce(function(a,v){return a.concat(Array.isArray(v)&&d>0?v.flat(d-1):v)},[])};
+if(!Array.prototype.flatMap)Array.prototype.flatMap=function(f,t){return this.map(f,t).flat()};
+if(window.Promise&&!Promise.prototype.finally)Promise.prototype.finally=function(f){return this.then(function(v){return Promise.resolve(f()).then(function(){return v})},function(e){return Promise.resolve(f()).then(function(){throw e})})};
+if(!Object.fromEntries)Object.fromEntries=function(it){var o={};Array.from(it).forEach(function(e){o[e[0]]=e[1]});return o};
+})();</script>`;
+html = html.replace('<head>', '<head>' + POLY);
 fs.writeFileSync(htmlPath, html);
 
 const shimPath = path.join(assets, 'native-shim.js');
