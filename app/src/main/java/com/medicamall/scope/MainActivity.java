@@ -115,6 +115,20 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(false);
         s.setSupportMultipleWindows(false);
         s.setJavaScriptCanOpenWindowsAutomatically(false);
+        if (BuildConfig.CAR) {
+            // head units often ship with a large font scale / odd density: fixed layout width + 100% text
+            s.setUseWideViewPort(true);
+            s.setLoadWithOverviewMode(true);
+            s.setTextZoom(100);
+            s.setSupportZoom(false);
+            try {
+                if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                    java.util.Set<String> origins = new java.util.HashSet<>();
+                    origins.add(ORIGIN);
+                    androidx.webkit.WebViewCompat.addDocumentStartJavaScript(web, carJs(), origins);
+                }
+            } catch (Throwable ignored) { }
+        }
 
         assets = new WebViewAssetLoader.Builder()
                 .setDomain(HOST)
@@ -143,7 +157,7 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView v, String url) {
-                if (BuildConfig.CAR) v.evaluateJavascript(CAR_CSS_JS, null);
+                if (BuildConfig.CAR) v.evaluateJavascript(carJs(), null);
             }
 
             @Override
@@ -744,14 +758,23 @@ public class MainActivity extends Activity {
                 | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
     }
 
-    // Car screen (~1024x600 landscape): tighter header/padding so the live view, photo and record buttons fit on one screen.
-    static final String CAR_CSS_JS = "(function(){if(document.getElementById('mmCar'))return;var s=document.createElement('style');s.id='mmCar';"
-            + "s.textContent='@media (min-width:800px) and (max-height:720px){"
-            + "header{padding:4px 12px!important}header .logo{width:38px!important;height:38px!important}header h1{font-size:15px!important}header small{font-size:11px!important}"
-            + "main{padding:8px!important;gap:8px!important;grid-template-columns:minmax(0,1fr) 300px!important}"
-            + ".card{padding:8px!important}.stage{max-height:calc(100vh - 140px)!important}"
-            + ".toolbar{margin-top:6px!important;gap:6px!important}.big{padding:12px 26px!important;font-size:19px!important;min-height:54px}"
-            + "}';(document.head||document.documentElement).appendChild(s);})();";
+    /**
+     * Car screen: lay the exam screen out at a fixed 1024 CSS px width whatever the head unit's density is
+     * (some report 1.5x and fall into the phone layout), then apply the landscape layout from assets/car.css.
+     */
+    private String carJs() {
+        String css = "";
+        try { css = new String(Updates.read(getAssets().open("car.css")), java.nio.charset.StandardCharsets.UTF_8); } catch (Exception ignored) { }
+        css = css.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ").replace("\r", " ");
+        return "(function(){if(window.__mmCar)return;window.__mmCar=1;var CSS='" + css + "';"
+                + "var apply=function(){var h=document.head||document.documentElement;"
+                + "var m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';h.appendChild(m);}"
+                + "m.content='width=1024, user-scalable=no';"
+                + "if(!document.getElementById('mmCar')){var s=document.createElement('style');s.id='mmCar';s.textContent=CSS;h.appendChild(s);}"
+                + "var t=document.getElementById('toolsBox');if(t&&!t.dataset.car){t.dataset.car='1';t.removeAttribute('open');}"
+                + "document.documentElement.classList.add('mmcar');};"
+                + "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',apply);else apply();})();";
+    }
 
     @Override
     protected void onDestroy() {

@@ -1,0 +1,36 @@
+html,body{height:100%;overflow:hidden}
+body{display:flex;flex-direction:column;padding:0!important}
+header{flex:none;padding:4px 10px!important;gap:8px!important;flex-wrap:nowrap!important}
+header .bes,header .brand small{display:none!important}
+header .logo{width:36px!important;height:36px!important}
+header .brand{gap:8px!important;min-width:0}
+header .brand h1{font-size:14px!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px}
+header .chips{width:auto!important;flex-wrap:nowrap!important;gap:6px!important}
+header .chips .chip{flex:none!important;font-size:12px!important;padding:3px 10px!important}
+header .chips button,header .seg button{min-height:34px!important;padding:4px 12px!important;font-size:13px!important;flex:none!important}
+main{flex:1;min-height:0;display:grid!important;grid-template-columns:minmax(0,1fr) 290px!important;gap:8px!important;padding:6px 8px!important}
+main>section.card{display:flex;flex-direction:column;min-height:0;overflow-y:auto;padding:8px!important}
+.stage{flex:none;aspect-ratio:auto!important;height:calc(100vh - 176px)!important;max-height:none!important;width:100%!important;border-radius:10px!important}
+.placeholder .plat{display:none}
+.toolbar{margin-top:6px!important;gap:6px!important}
+.mainbtns{display:flex!important;position:static!important;gap:8px;width:100%;box-shadow:none!important;background:none!important;padding:0!important}
+.mainbtns button{flex:1;justify-content:center;min-height:52px!important;font-size:18px!important;padding:8px 12px!important}
+.tools>summary{display:flex!important;align-items:center;justify-content:space-between;margin-top:8px;padding:9px 14px;border:1.5px solid var(--line);border-radius:12px;font-weight:700;color:var(--navy);list-style:none;background:#fff}
+.tools>summary::-webkit-details-marker{display:none}
+.tools>summary::after{content:'▾'}
+.tools[open]>summary::after{content:'▴'}
+.tools .toolbar button,.tools .toolbar select{font-size:13px!important;min-height:38px!important;padding:6px 10px!important}
+.kbdhint,footer{display:none!important}
+aside{min-height:0;overflow-y:auto;gap:8px!important}
+aside .card{padding:8px!important}
+.side h2{font-size:14px!important;margin-bottom:6px!important}
+.patient{padding:6px 10px!important}.patient b{font-size:15px!important}
+.gallery{grid-template-columns:repeat(2,minmax(0,1fr))!important;max-height:none!important}
+.actions{gap:6px!important;margin-top:6px!important}
+.actions button,.actions .upl{font-size:12px!important;min-height:34px!important;padding:5px 10px!important}
+aside .hint{display:none}
+.toast{white-space:normal;max-width:88%;text-align:center}
+dialog{width:min(560px,94vw)}.dlg-b{max-height:calc(100vh - 140px)!important}
+.side h2{white-space:nowrap;gap:6px}
+.side h2 button{white-space:nowrap;padding:4px 10px!important;min-height:30px!important;font-size:12px!important}
+.tools>summary{margin-top:6px!important;padding:6px 14px!important}
