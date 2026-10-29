@@ -67,6 +67,24 @@ class LogoProbe {
                         "/odm", "/custom", "/system/usr", ext, "/mnt/sdcard", "/storage", "/data/local/tmp", "/cache"};
                 for (String root : roots) walk(new File(root), 0, r, count);
 
+                r.append("\n== boot scripts ==\n");
+                for (String fp : new String[]{"/system/etc/init/bootanim.rc", "/system/etc/init/bootlogoupdater.rc", "/system/bin/bootlogo_updater.sh"}) {
+                    r.append("--- ").append(fp).append('\n');
+                    try (InputStream in = new FileInputStream(fp)) {
+                        byte[] b = new byte[8192]; int n = in.read(b);
+                        if (n > 0) r.append(new String(b, 0, n, StandardCharsets.UTF_8));
+                    } catch (Throwable t) { r.append("(").append(t.getMessage()).append(")"); }
+                    r.append('\n');
+                }
+                File[] cm = new File("/custom/media").listFiles();
+                r.append("/custom/media: ");
+                if (cm == null) r.append("(not readable)"); else for (File f : cm) r.append(f.getName()).append(" ").append(f.length()).append("B  ");
+                r.append('\n');
+                // bootanimation binary: copy it so the paths it reads can be checked
+                for (String bin : new String[]{"/system/bin/bootanimation", "/system/lib/libbootanimation.so"}) {
+                    File src = new File(bin);
+                    if (src.canRead()) { File dst = new File(dir, src.getName() + ".bin"); if (copy(src, dst)) { out.add(dst); mimes.add("application/octet-stream"); } }
+                }
                 r.append("\n== storage roots ==\n");
                 for (String root : new String[]{ext, "/storage", "/mnt", "/mnt/media_rw"}) {
                     File[] ls = new File(root).listFiles();
