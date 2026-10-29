@@ -796,6 +796,12 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void bootAnim(boolean install) {
+            if (!BuildConfig.CAR) return;
+            ui.post(() -> { if (install) BootAnim.install(MainActivity.this); else BootAnim.restore(MainActivity.this); });
+        }
+
+        @JavascriptInterface
         public void reloadWeb() { ui.post(() -> web.reload()); }
 
         @JavascriptInterface
@@ -858,7 +864,9 @@ public class MainActivity extends Activity {
                 + "m.content='width=1024, user-scalable=no';"
                 + "if(!document.getElementById('mmCar')){var s=document.createElement('style');s.id='mmCar';s.textContent=CSS;h.appendChild(s);}"
                 + "var t=document.getElementById('toolsBox');if(t&&!t.dataset.car){t.dataset.car='1';t.removeAttribute('open');t.addEventListener('toggle',function(){if(t.open)setTimeout(function(){t.scrollIntoView(false)},60)});}"
-                + "var ds=document.getElementById('dlgSettings');if(ds&&!document.getElementById('mmProbe')){var pb=document.createElement('button');pb.id='mmProbe';pb.className='ghost';pb.type='button';pb.textContent='🛠 تشخيص لوجو التشغيل';pb.style.margin='12px 0';pb.onclick=function(){try{BesNative.logoProbe()}catch(x){}};(ds.querySelector('.dlg-b')||ds).appendChild(pb);}"
+                + "var ds=document.getElementById('dlgSettings');if(ds&&!document.getElementById('mmProbe')){var pb=document.createElement('button');pb.id='mmProbe';pb.className='ghost';pb.type='button';pb.textContent='🛠 تشخيص لوجو التشغيل';pb.style.margin='12px 0';pb.onclick=function(){try{BesNative.logoProbe()}catch(x){}};(ds.querySelector('.dlg-b')||ds).appendChild(pb);"
+                + "var mk=function(id,t,v){var x=document.createElement('button');x.id=id;x.className='ghost';x.type='button';x.textContent=t;x.style.margin='0 0 8px 8px';x.onclick=function(){try{BesNative.bootAnim(v)}catch(e){}};(ds.querySelector('.dlg-b')||ds).appendChild(x);};"
+                + "mk('mmBa1','🎬 أنيميشن تشغيل ميديكا مول',true);mk('mmBa0','↺ أنيميشن المصنع',false);}"
                 + "document.documentElement.classList.add('mmcar');};"
                 // on-screen keyboard covers the bottom half of a 600px screen: while typing in a popup, shrink it to the top
                 + "var isField=function(e){return e&&e.matches&&e.matches('input:not([type=range]):not([type=file]):not([type=checkbox]):not([type=radio]),textarea')&&e.closest&&e.closest('dialog');};"
