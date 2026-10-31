@@ -26,7 +26,7 @@ jobs:
           for aar in /tmp/aar/uvc.aar; do
             echo "== $aar"; d=$(mktemp -d); unzip -q -o "$aar" -d $d
             jar tf $d/classes.jar | grep -E '^com/(herohan|serenegiant)/.*\.class$' | grep -v '\$' > $d/list.txt
-            cat $d/list.txt
+            grep -E 'uvcapp/[A-Z]|usb/UVCCamera|widget' $d/list.txt
             for c in com/herohan/uvcapp/ICameraHelper com/herohan/uvcapp/CameraHelper com/herohan/uvcapp/ImageCapture com/herohan/uvcapp/VideoCapture com/serenegiant/usb/UVCCamera; do
               javap -cp $d/classes.jar -public ${c//\//.} 2>/dev/null || true
             done
@@ -38,6 +38,8 @@ jobs:
           python3 - <<'PY'
           t=open('/tmp/uvc-api.txt',errors='replace').read()
           t=t.replace('%','%25').replace('\r','').replace('\n','%0A')
-          for k in range(0,min(len(t),9*30000),30000):
-              print('::notice title=uvc'+str(k//30000)+'::'+t[k:k+30000])
+          parts=[t[k:k+3900] for k in range(0,len(t),3900)]
+          kinds=['notice']*10+['warning']*10+['error']*10
+          for i,(kind,p) in enumerate(zip(kinds,parts)):
+              print('::'+kind+' title=uvc%02d::'%i+p)
           PY
