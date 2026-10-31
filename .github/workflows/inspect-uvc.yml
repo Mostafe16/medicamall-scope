@@ -26,11 +26,11 @@ jobs:
           for aar in /tmp/aar/uvc.aar; do
             echo "== $aar"; d=$(mktemp -d); unzip -q -o "$aar" -d $d
             jar tf $d/classes.jar | grep -E '^com/(herohan|serenegiant)/.*\.class$' | grep -v '\$' > $d/list.txt
-            grep -E 'uvcapp/[A-Z]|usb/UVCCamera|widget' $d/list.txt
-            for c in com/herohan/uvcapp/ICameraHelper com/herohan/uvcapp/CameraHelper com/herohan/uvcapp/ImageCapture com/herohan/uvcapp/VideoCapture com/serenegiant/usb/UVCCamera; do
+            for c in com/herohan/uvcapp/VideoCaptureConfig com/herohan/uvcapp/CameraPreviewConfig com/serenegiant/usb/IFrameCallback; do
               javap -cp $d/classes.jar -public ${c//\//.} 2>/dev/null || true
             done
-            for c in 'com.herohan.uvcapp.ImageCapture$OutputFileOptions$Builder' 'com.herohan.uvcapp.VideoCapture$OutputFileOptions$Builder' 'com.herohan.uvcapp.ImageCapture$OnImageCaptureCallback' 'com.herohan.uvcapp.VideoCapture$OnVideoCaptureCallback' 'com.herohan.uvcapp.ImageCapture$OutputFileResults' 'com.herohan.uvcapp.VideoCapture$OutputFileResults'; do javap -cp $d/classes.jar -public "$c" 2>/dev/null || true; done
+            for c in 'com.herohan.uvcapp.VideoCaptureConfig$Builder' 'com.herohan.uvcapp.CameraPreviewConfig$Builder'; do javap -cp $d/classes.jar -public "$c" 2>/dev/null || true; done
+            for c in 'x' 'com.herohan.uvcapp.VideoCapture$OutputFileOptions$Builder' 'com.herohan.uvcapp.ImageCapture$OnImageCaptureCallback' 'com.herohan.uvcapp.VideoCapture$OnVideoCaptureCallback' 'com.herohan.uvcapp.ImageCapture$OutputFileResults' 'com.herohan.uvcapp.VideoCapture$OutputFileResults'; do javap -cp $d/classes.jar -public "$c" 2>/dev/null || true; done
           done
       - name: Publish output as annotations
         if: always()
