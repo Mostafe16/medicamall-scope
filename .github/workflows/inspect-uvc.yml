@@ -5,7 +5,7 @@ on:
     branches: [test/car-screen]
     paths: ['.github/workflows/inspect-uvc.yml']
 permissions:
-  contents: read
+  contents: write
 jobs:
   inspect:
     runs-on: ubuntu-latest
@@ -19,7 +19,7 @@ jobs:
         run: gradle :app:dependencies --configuration releaseRuntimeClasspath --no-daemon -q | grep -i uvc || true
       - name: javap
         run: |
-          set -x
+          exec > >(tee /tmp/uvc-api.txt) 2>&1
           for aar in $(find ~/.gradle -iname 'UVCAndroid*.aar' -o -iname 'libuvccamera*.aar' -o -iname 'libausbc*.aar' | sort -u); do
             echo "== $aar"; d=$(mktemp -d); unzip -q -o "$aar" -d $d
             jar tf $d/classes.jar | grep -E '^com/(herohan|serenegiant)/.*\.class$' | grep -v '\$' > $d/list.txt
@@ -29,3 +29,7 @@ jobs:
             done
             for c in 'com.herohan.uvcapp.ImageCapture$OutputFileOptions$Builder' 'com.herohan.uvcapp.VideoCapture$OutputFileOptions$Builder' 'com.herohan.uvcapp.ImageCapture$OnImageCaptureCallback' 'com.herohan.uvcapp.VideoCapture$OnVideoCaptureCallback' 'com.herohan.uvcapp.ImageCapture$OutputFileResults' 'com.herohan.uvcapp.VideoCapture$OutputFileResults'; do javap -cp $d/classes.jar -public "$c" 2>/dev/null || true; done
           done
+      - name: Publish output
+        if: always()
+        env: { GH_TOKEN: '${{ github.token }}' }
+        run: gh release upload car-test /tmp/uvc-api.txt --clobber
