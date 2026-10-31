@@ -24,6 +24,9 @@ import android.print.PrintAttributes;
 import android.print.PrintManager;
 import android.provider.MediaStore;
 import android.util.Base64;
+import android.graphics.Matrix;
+import android.graphics.SurfaceTexture;
+import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -43,6 +46,8 @@ import androidx.webkit.WebViewAssetLoader;
 
 import com.herohan.uvcapp.CameraHelper;
 import com.herohan.uvcapp.ICameraHelper;
+import com.herohan.uvcapp.VideoCapture;
+import com.herohan.uvcapp.VideoCaptureConfig;
 import com.serenegiant.usb.Size;
 import com.serenegiant.usb.UVCCamera;
 
@@ -104,8 +109,29 @@ public class MainActivity extends Activity {
         WebView.setWebContentsDebuggingEnabled(true);
 
         web = new WebView(this);
-        web.setBackgroundColor(Color.WHITE);
-        setContentView(web);
+        if (NATIVE_LIVE) {
+            // root: page background + black stage box with the camera TextureView + the exam screen (transparent) on top
+            FrameLayout root = new FrameLayout(this);
+            root.setBackgroundColor(Color.parseColor("#eef4fb"));
+            stageBox = new FrameLayout(this);
+            stageBox.setBackgroundColor(Color.parseColor("#05080c"));
+            liveView = new TextureView(this);
+            liveView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+                @Override public void onSurfaceTextureAvailable(SurfaceTexture st, int w, int h) { liveTex = st; attachLive(); applyLiveTransform(); }
+                @Override public void onSurfaceTextureSizeChanged(SurfaceTexture st, int w, int h) { applyLiveTransform(); }
+                @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture st) { detachLive(); liveTex = null; return true; }
+                @Override public void onSurfaceTextureUpdated(SurfaceTexture st) { camFrames++; }
+            });
+            stageBox.addView(liveView, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+            FrameLayout.LayoutParams sp = new FrameLayout.LayoutParams(1, 1);
+            root.addView(stageBox, sp);
+            web.setBackgroundColor(Color.TRANSPARENT);
+            root.addView(web, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+            setContentView(root);
+        } else {
+            web.setBackgroundColor(Color.WHITE);
+            setContentView(web);
+        }
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -141,6 +167,7 @@ public class MainActivity extends Activity {
                 Uri u = r.getUrl();
                 if (HOST.equals(u.getHost()) && u.getPath() != null && u.getPath().startsWith("/uvc/")) {
                     if (u.getPath().startsWith("/uvc/full")) return fullResponse();
+                    if (u.getPath().startsWith("/uvc/rec") && recFile != null && recFile.exists()) return fileResponse(recFile, "video/mp4");
                     return frameResponse();
                 }
                 if (HOST.equals(u.getHost()) && "/assets/index.html".equals(u.getPath())) {
@@ -223,7 +250,13 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(), "BesNative");
         web.loadUrl(START_URL);
 
-        if (!hasCameraPerm() || needsLegacyWrite()) requestPerms();
+        if (NATIVE_LIVE && !hasMicPerm()) {
+            List<String> p = new ArrayList<>();
+            p.add(Manifest.permission.RECORD_AUDIO);
+            if (!hasCameraPerm()) p.add(Manifest.permission.CAMERA);
+            if (needsLegacyWrite()) p.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+            requestPermissions(p.toArray(new String[0]), REQ_PERMS);
+        } else if (!hasCameraPerm() || needsLegacyWrite()) requestPerms();
         initCam();
         handleUsbIntent(getIntent());
         ui.postDelayed(this::openFirstUvc, 1200);
@@ -373,18 +406,20 @@ public class MainActivity extends Activity {
                     Size p = cam.getPreviewSize();
                     if (p != null) synchronized (frameLock) { fw = p.width; fh = p.height; }
                 } catch (Throwable ignored) { }
-                cam.setFrameCallback(MainActivity.this::onFrame, UVCCamera.PIXEL_FORMAT_NV21);
+                if (!NATIVE_LIVE) cam.setFrameCallback(MainActivity.this::onFrame, UVCCamera.PIXEL_FORMAT_NV21);
                 try {
                     cam.setButtonCallback((button, st) -> { if (st == 1) onScopeButton(); });
                 } catch (Throwable ignored) { }
                 cam.startPreview();
                 camOpen = true;
+                if (NATIVE_LIVE) ui.post(() -> { liveAdded = false; attachLive(); applyLiveTransform(); });
                 js("open");
             }
 
             @Override
             public void onCameraClose(UsbDevice device) {
                 camOpen = false;
+                if (NATIVE_LIVE) ui.post(MainActivity.this::detachLive);
                 js("closed");
             }
 
@@ -433,7 +468,7 @@ public class MainActivity extends Activity {
             try { cam.closeCamera(); } catch (Throwable ignored) { }
             ui.postDelayed(() -> { if (!camOpen && cam != null) cam.selectDevice(device); }, 900);
         };
-        ui.postDelayed(openWatch, 5000);
+        if (!NATIVE_LIVE) ui.postDelayed(openWatch, 5000);
     }
 
     private static String usbId(UsbDevice d) {
@@ -541,6 +576,17 @@ public class MainActivity extends Activity {
     private byte[] half, fullWork;
     private volatile long encMs = 0, camFrames = 0;
 
+    // ---- car edition: native live view (TextureView under a transparent WebView) ----
+    static final boolean NATIVE_LIVE = BuildConfig.CAR;
+    private FrameLayout stageBox;
+    private TextureView liveView;
+    private SurfaceTexture liveTex;
+    private boolean liveAdded = false;
+    private int stX, stY, stW, stH;            // stage rect in screen px
+    private float vRot = 0, vSx = 1, vSy = 1;  // rotation / mirror+zoom from the exam screen
+    private volatile String recState = "idle";
+    private File recFile;
+
     /** NV21 → NV21 at half width/height (drop every other pixel / chroma pair). */
     private static void halfNv21(byte[] src, int w, int h, byte[] dst) {
         int w2 = w / 2, h2 = h / 2, i = 0;
@@ -572,6 +618,7 @@ public class MainActivity extends Activity {
     /** Latest frame at the camera's full size (used for photos while the live view runs at half size). */
     private WebResourceResponse fullResponse() {
         int w, h;
+        if (NATIVE_LIVE && camOpen) grabOneFrame();
         synchronized (frameLock) {
             if (frame == null) return empty();
             if (fullWork == null || fullWork.length != frame.length) fullWork = new byte[frame.length];
@@ -579,6 +626,62 @@ public class MainActivity extends Activity {
             w = fw; h = fh;
         }
         return jpeg(fullWork, w, h, 92);
+    }
+
+    /** Native live view has no per-frame callback: switch it on just long enough to get one fresh frame. */
+    private void grabOneFrame() {
+        long before;
+        synchronized (frameLock) { before = seq; }
+        try { cam.setFrameCallback(MainActivity.this::onFrame, UVCCamera.PIXEL_FORMAT_NV21); } catch (Throwable t) { return; }
+        synchronized (frameLock) {
+            long until = SystemClock.uptimeMillis() + 1200;
+            while (seq == before) {
+                long wait = until - SystemClock.uptimeMillis();
+                if (wait <= 0) break;
+                try { frameLock.wait(wait); } catch (InterruptedException e) { break; }
+            }
+        }
+        try { cam.setFrameCallback(null, UVCCamera.PIXEL_FORMAT_NV21); } catch (Throwable ignored) { }
+    }
+
+    // ---------------- native live view helpers ----------------
+    private void attachLive() {
+        if (!NATIVE_LIVE || cam == null || liveTex == null || !camOpen || liveAdded) return;
+        try { cam.addSurface(liveTex, false); liveAdded = true; } catch (Throwable ignored) { }
+    }
+
+    private void detachLive() {
+        if (!liveAdded) return;
+        liveAdded = false;
+        try { if (cam != null && liveTex != null) cam.removeSurface(liveTex); } catch (Throwable ignored) { }
+    }
+
+    /** object-fit:contain + rotation / mirror / zoom from the exam screen, applied on the GPU by the TextureView. */
+    private void applyLiveTransform() {
+        if (liveView == null) return;
+        float W = liveView.getWidth(), H = liveView.getHeight();
+        if (W <= 0 || H <= 0) return;
+        float cw0, ch0;
+        synchronized (frameLock) { cw0 = fw; ch0 = fh; }
+        boolean swap = Math.round(vRot) % 180 != 0;
+        float dw0 = swap ? ch0 : cw0, dh0 = swap ? cw0 : ch0;
+        float k = Math.min(W / dw0, H / dh0);
+        float cw = (swap ? dh0 : dw0) * k, ch = (swap ? dw0 : dh0) * k;
+        Matrix m = new Matrix();
+        m.postScale(cw / W, ch / H);
+        m.postTranslate((W - cw) / 2f, (H - ch) / 2f);
+        m.postRotate(vRot, W / 2f, H / 2f);
+        m.postScale(vSx, vSy, W / 2f, H / 2f);
+        liveView.setTransform(m);
+        liveView.invalidate();
+    }
+
+    private WebResourceResponse fileResponse(File f, String mime) {
+        try {
+            Map<String, String> hd = new HashMap<>();
+            hd.put("Cache-Control", "no-store");
+            return new WebResourceResponse(mime, null, 200, "OK", hd, new FileInputStream(f));
+        } catch (Exception e) { return empty(); }
     }
 
     private WebResourceResponse empty() {
@@ -673,7 +776,62 @@ public class MainActivity extends Activity {
 
         /** "WxH" of the camera when the live view is downscaled (photos should use /uvc/full.jpg), else "". */
         @JavascriptInterface
-        public String fullSize() { synchronized (frameLock) { return (BuildConfig.CAR && camOpen && fw > 800) ? fw + "x" + fh : ""; } }
+        public String fullSize() { synchronized (frameLock) { return (BuildConfig.CAR && camOpen && (fw > 800 || NATIVE_LIVE)) ? fw + "x" + fh : ""; } }
+
+        @JavascriptInterface
+        public boolean nativeLive() { return NATIVE_LIVE; }
+
+        /** stage rect in CSS px + the page's CSS width (to scale to screen px) */
+        @JavascriptInterface
+        public void stageRect(float x, float y, float w, float h, float cssWidth) {
+            ui.post(() -> {
+                if (stageBox == null || web == null || cssWidth <= 0) return;
+                float s = web.getWidth() / cssWidth;
+                int nx = Math.round(x * s), ny = Math.round(y * s), nw = Math.max(1, Math.round(w * s)), nh = Math.max(1, Math.round(h * s));
+                if (nx == stX && ny == stY && nw == stW && nh == stH) return;
+                stX = nx; stY = ny; stW = nw; stH = nh;
+                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(nw, nh);
+                lp.leftMargin = nx; lp.topMargin = ny;
+                stageBox.setLayoutParams(lp);
+                liveView.post(MainActivity.this::applyLiveTransform);
+            });
+        }
+
+        @JavascriptInterface
+        public void viewTransform(float rot, float sx, float sy) {
+            ui.post(() -> { vRot = rot; vSx = sx; vSy = sy; applyLiveTransform(); });
+        }
+
+        @JavascriptInterface
+        public boolean recStart(boolean audio) {
+            if (!NATIVE_LIVE || cam == null || !camOpen) return false;
+            try {
+                recFile = new File(getCacheDir(), "rec.mp4");
+                if (recFile.exists()) recFile.delete();
+                VideoCaptureConfig cfg = cam.getVideoCaptureConfig();
+                if (cfg != null) {
+                    cfg.setAudioCaptureEnable(audio && hasMicPerm());
+                    cfg.setBitRate(2_500_000);
+                    cam.setVideoCaptureConfig(cfg);
+                }
+                recState = "recording";
+                cam.startRecording(new VideoCapture.OutputFileOptions.Builder(recFile).build(), new VideoCapture.OnVideoCaptureCallback() {
+                    @Override public void onStart() { }
+                    @Override public void onVideoSaved(VideoCapture.OutputFileResults r) { recState = "saved"; }
+                    @Override public void onError(int code, String msg, Throwable t) { recState = "error:" + code + " " + msg; }
+                });
+                return true;
+            } catch (Throwable t) {
+                recState = "error:" + t;
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public void recStop() { try { if (cam != null) cam.stopRecording(); } catch (Throwable t) { recState = "error:" + t; } }
+
+        @JavascriptInterface
+        public String recState() { return recState; }
 
         @JavascriptInterface
         public String frameSize() { synchronized (frameLock) { return fw + "x" + fh; } }
@@ -879,10 +1037,16 @@ public class MainActivity extends Activity {
                 + "var mk=function(id,t,v){var x=document.createElement('button');x.id=id;x.className='ghost';x.type='button';x.textContent=t;x.style.margin='0 0 8px 8px';x.onclick=function(){try{BesNative.bootAnim(v)}catch(e){}};(ds.querySelector('.dlg-b')||ds).appendChild(x);};"
                 + "mk('mmBa1','🎬 أنيميشن تشغيل ميديكا مول',true);mk('mmBa0','↺ أنيميشن المصنع',false);}"
                 // no-op filter/transform on the live <video> still forces a GPU filter pass every frame on Mali-400: drop them
-                + "var NOF='brightness(100%) contrast(100%) saturate(100%)';var fix=function(el){if(!el)return;if(el.style.filter===NOF)el.style.filter='none';var tf=el.style.transform;if(tf==='rotate(0deg) scale(1, 1)'||tf==='rotate(0deg) scale(1)')el.style.transform='none';el.style.transition='none';};"
+                + "var NOF='brightness(100%) contrast(100%) saturate(100%)';var fix=function(el){if(!el)return;if(el.style.filter===NOF)el.style.filter='none';var tf=el.style.transform;if(tf&&tf!=='none')el.setAttribute('data-mmtf',tf);else if(tf==='none'&&!el.getAttribute('data-mmtf'))el.setAttribute('data-mmtf','');if(tf==='rotate(0deg) scale(1, 1)'||tf==='rotate(0deg) scale(1)')el.setAttribute('data-mmtf','');if(tf==='rotate(0deg) scale(1, 1)'||tf==='rotate(0deg) scale(1)')el.style.transform='none';el.style.transition='none';};"
                 + "['video','freeze'].forEach(function(id){var el=document.getElementById(id);if(!el||el.dataset.mmobs)return;el.dataset.mmobs='1';fix(el);new MutationObserver(function(){fix(el)}).observe(el,{attributes:true,attributeFilter:['style']});});"
+                // native live view: make the page transparent over the stage, report its rect + rotation/mirror/zoom to Android
+                + "if(window.BesNative&&BesNative.nativeLive&&BesNative.nativeLive()&&!window.__mmNat){window.__mmNat=1;"
+                + "var ns=document.createElement('style');ns.textContent='html,body,main,main>section.card,.stage{background:transparent!important;box-shadow:none!important}#video{opacity:0!important}.stage .placeholder{background:transparent}';(document.head||document.documentElement).appendChild(ns);"
+                + "var last='';var rep=function(){var st=document.getElementById('stage');if(!st)return;var r=st.getBoundingClientRect();var k=[r.left,r.top,r.width,r.height,window.innerWidth].map(Math.round).join(',');if(k===last)return;last=k;try{BesNative.stageRect(r.left,r.top,r.width,r.height,window.innerWidth)}catch(e){}};"
+                + "rep();setInterval(rep,500);window.addEventListener('resize',rep);document.addEventListener('scroll',rep,true);"
+                + "var lt='';var tr=function(){var v=document.getElementById('video');if(!v)return;var raw=v.getAttribute('data-mmtf')||'';if(raw===lt)return;lt=raw;var m=/rotate\\(([-\\d.]+)deg\\)\\s*scale\\(([-\\d.]+)(?:,\\s*([-\\d.]+))?\\)/.exec(raw);var rot=0,sx=1,sy=1;if(m){rot=+m[1];sx=+m[2];sy=m[3]!==undefined?+m[3]:sx;}try{BesNative.viewTransform(rot,sx,sy)}catch(e){}};setInterval(tr,300);}"
                 // small perf readout in the corner of the live view (test builds)
-                + "if(!document.getElementById('mmPerf')&&window.BesNative&&BesNative.perf){var st=document.getElementById('stage');if(st){var pv=document.createElement('div');pv.id='mmPerf';pv.style.cssText='position:absolute;left:8px;bottom:8px;z-index:5;background:rgba(0,0,0,.55);color:#fff;font:12px monospace;padding:2px 8px;border-radius:8px;direction:ltr;pointer-events:none';st.appendChild(pv);var lc=0,ls=0;setInterval(function(){try{var p=String(BesNative.perf()).split(',');var c=+p[0],s=(window.__mmPerf||{}).shown||0;pv.textContent='cam '+(c-lc)+'fps · screen '+(s-ls)+'fps · jpeg '+p[1]+'ms · '+p[2];lc=c;ls=s;}catch(e){}},1000);}}"
+                + "if(!document.getElementById('mmPerf')&&window.BesNative&&BesNative.perf){var st=document.getElementById('stage');if(st){var pv=document.createElement('div');pv.id='mmPerf';pv.style.cssText='position:absolute;left:8px;bottom:8px;z-index:5;background:rgba(0,0,0,.55);color:#fff;font:12px monospace;padding:2px 8px;border-radius:8px;direction:ltr;pointer-events:none';st.appendChild(pv);var lc=0,ls=0;setInterval(function(){try{var p=String(BesNative.perf()).split(',');var c=+p[0],s=(window.__mmPerf||{}).shown||0;pv.textContent=(window.__mmNat?('live '+(c-lc)+'fps · native · '+p[2]):('cam '+(c-lc)+'fps · screen '+(s-ls)+'fps · jpeg '+p[1]+'ms · '+p[2]));lc=c;ls=s;}catch(e){}},1000);}}"
                 + "document.documentElement.classList.add('mmcar');};"
                 // on-screen keyboard covers the bottom half of a 600px screen: while typing in a popup, shrink it to the top
                 + "var isField=function(e){return e&&e.matches&&e.matches('input:not([type=range]):not([type=file]):not([type=checkbox]):not([type=radio]),textarea')&&e.closest&&e.closest('dialog');};"

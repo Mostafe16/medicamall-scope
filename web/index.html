@@ -676,6 +676,29 @@ async function startRec(){
   try { await startRecNow(); } finally { recBusy = false; }
 }
 async function startRecNow(){
+  /* Android car screen: the live view is drawn natively, so the video is recorded natively too (H.264 MP4) */
+  if (window.BesNative && BesNative.nativeLive && BesNative.nativeLive()){
+    recHadAudio = !!S.recAudio;
+    if (!BesNative.recStart(recHadAudio)){ toast('⚠ مقدرتش أبدأ التسجيل'); return; }
+    recMime = 'video/mp4';
+    rec = { mimeType: 'video/mp4', stop: async () => {
+      rec = null; paintMic();
+      const dur = Math.round((Date.now() - recStart) / 1000);
+      BesNative.recStop();
+      toast('⏳ جاري حفظ الفيديو…');
+      let st = 'recording';
+      for (let i = 0; i < 150 && (st === 'recording'); i++){ await new Promise(r => setTimeout(r, 200)); st = String(BesNative.recState()); }
+      if (st !== 'saved'){ toast('⚠ الفيديو ما اتحفظش ' + st); return; }
+      const blob = await (await fetch('/uvc/rec.mp4?t=' + Date.now(), {cache:'no-store'})).blob();
+      await saveMedia(new Blob([blob], {type:'video/mp4'}), 'video', 'mp4', dur, recHadAudio);
+      toast('⏹ الفيديو اتحفظ');
+    } };
+    recStart = Date.now();
+    $('recBadge').classList.add('show'); $('btnRec').textContent = '⏹ إيقاف التسجيل'; paintMic();
+    recTimer = setInterval(() => { const s = Math.floor((Date.now()-recStart)/1000); $('recTime').textContent = `${String(s/60|0).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; }, 500);
+    toast(recHadAudio ? '⏺ بدأ التسجيل بالصوت 🎤' : '⏺ بدأ التسجيل');
+    return;
+  }
   if (!window.MediaRecorder){ toast('المتصفح مش بيدعم تسجيل الفيديو'); return; }
   // record from a canvas so rotation / flip / filters are included
   // one canvas reused for every frame, 20 fps: much lighter on weak CPUs (Android TV boxes / car screens)

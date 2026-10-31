@@ -13,6 +13,8 @@
   /* car head unit (weak CPU): cap the live view so the UI stays responsive */
   var CAR = false; try { CAR = !!(N.isCar && N.isCar()); } catch (e) {}
   var MIN_GAP = CAR ? 66 : 0; /* ~15 fps */
+  /* car edition: Android draws the live view itself under the page; the page only gets a placeholder stream */
+  var NATIVE = false; try { NATIVE = !!(N.nativeLive && N.nativeLive()); } catch (e) {}
   window.__mmPerf = { shown: 0 };
 
   /* ---------------- camera ---------------- */
@@ -50,7 +52,12 @@
       t.stop = function () { st.running = false; st.ended = true; _stop(); if (active && active.track === t) active = null; };
 
       var first = null, gotFirst = new Promise(function (r) { first = r; });
-      (async function loop() {
+      if (NATIVE) {
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
+        first();
+        var keep = setInterval(function () { if (!st.running) { clearInterval(keep); return; } ctx.fillRect(0, 0, 1, 1); }, 1000);
+      }
+      if (!NATIVE) (async function loop() {
         while (st.running) {
           try {
             var t0 = Date.now();
