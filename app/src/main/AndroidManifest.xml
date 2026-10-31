@@ -41,6 +41,19 @@
                 android:resource="@xml/mm_usb_filter" />
         </activity>
 
+        <!-- car edition only: can be the head unit's home screen, so it is up as soon as Android starts (no wait for BOOT_COMPLETED) -->
+        <activity-alias
+            android:name=".HomeAlias"
+            android:targetActivity=".MainActivity"
+            android:enabled="${carOnly}"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+
         <!-- car edition only (enabled by the build): open the exam screen when the head unit boots -->
         <receiver
             android:name=".BootReceiver"

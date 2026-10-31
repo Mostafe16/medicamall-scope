@@ -21,6 +21,6 @@ public class BootReceiver extends BroadcastReceiver {
                 app.startActivity(i);
             } catch (Throwable ignored) { }
             pr.finish();
-        }, 6000);
+        }, 500);
     }
 }

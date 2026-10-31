@@ -971,6 +971,27 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public void setHome() {
+            ui.post(() -> {
+                try { startActivity(new Intent(android.provider.Settings.ACTION_HOME_SETTINGS)); return; } catch (Throwable ignored) { }
+                try {
+                    Intent h = new Intent(Intent.ACTION_MAIN); h.addCategory(Intent.CATEGORY_HOME);
+                    startActivity(Intent.createChooser(h, "اختار الشاشة الرئيسية"));
+                } catch (Throwable ignored) { }
+            });
+        }
+
+        /** way out of the kiosk: the head unit's own launcher (radio, settings…) */
+        @JavascriptInterface
+        public void openCarLauncher() {
+            ui.post(() -> {
+                Intent i = getPackageManager().getLaunchIntentForPackage("com.reglink.launcher4");
+                if (i == null) i = new Intent(android.provider.Settings.ACTION_SETTINGS);
+                try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); } catch (Throwable t) { toast("مش لاقي شاشة العربية"); }
+            });
+        }
+
+        @JavascriptInterface
         public void reloadWeb() { ui.post(() -> web.reload()); }
 
         @JavascriptInterface
@@ -993,6 +1014,7 @@ public class MainActivity extends Activity {
             chrome.onHideCustomView();
             return;
         }
+        if (BuildConfig.CAR) return; // car edition is the home screen: Back never leaves the exam screen
         super.onBackPressed();
     }
 
@@ -1032,10 +1054,17 @@ public class MainActivity extends Activity {
                 + "var m=document.querySelector('meta[name=viewport]');if(!m){m=document.createElement('meta');m.name='viewport';h.appendChild(m);}"
                 + "m.content='width=1024, user-scalable=no';"
                 + "if(!document.getElementById('mmCar')){var s=document.createElement('style');s.id='mmCar';s.textContent=CSS;h.appendChild(s);}"
-                + "var t=document.getElementById('toolsBox');if(t&&!t.dataset.car){t.dataset.car='1';t.removeAttribute('open');t.addEventListener('toggle',function(){if(t.open)setTimeout(function(){t.scrollIntoView(false)},60)});}"
+                + "var t=document.getElementById('toolsBox');if(t&&!t.dataset.car){t.dataset.car='1';t.removeAttribute('open');"
+                // capture bar: move "freeze" next to photo/record and add a tools button (tools open as a panel over the live view)
+                + "var mb=document.querySelector('.mainbtns');var fz=document.getElementById('btnFreeze');if(mb&&fz&&fz.parentNode!==mb){fz.classList.add('mm-side');fz.textContent='⏸ تجميد';mb.appendChild(fz);}"
+                + "if(mb&&!document.getElementById('mmTools')){var tb=document.createElement('button');tb.id='mmTools';tb.type='button';tb.className='mm-side';tb.textContent='⚙ أدوات';tb.onclick=function(){t.open=!t.open;tb.classList.toggle('on',t.open);};mb.appendChild(tb);"
+                + "var stg=document.getElementById('stage');if(stg)stg.addEventListener('click',function(){if(t.open){t.open=false;tb.classList.remove('on');}});}"
+                + "}"
                 + "var ds=document.getElementById('dlgSettings');if(ds&&!document.getElementById('mmProbe')){var pb=document.createElement('button');pb.id='mmProbe';pb.className='ghost';pb.type='button';pb.textContent='🛠 تشخيص لوجو التشغيل';pb.style.margin='12px 0';pb.onclick=function(){try{BesNative.logoProbe()}catch(x){}};(ds.querySelector('.dlg-b')||ds).appendChild(pb);"
                 + "var mk=function(id,t,v){var x=document.createElement('button');x.id=id;x.className='ghost';x.type='button';x.textContent=t;x.style.margin='0 0 8px 8px';x.onclick=function(){try{BesNative.bootAnim(v)}catch(e){}};(ds.querySelector('.dlg-b')||ds).appendChild(x);};"
-                + "mk('mmBa1','🎬 أنيميشن تشغيل ميديكا مول',true);mk('mmBa0','↺ أنيميشن المصنع',false);}"
+                + "mk('mmBa1','🎬 أنيميشن تشغيل ميديكا مول',true);mk('mmBa0','↺ أنيميشن المصنع',false);"
+                + "var mk2=function(id,t,fn){var x=document.createElement('button');x.id=id;x.className='ghost';x.type='button';x.textContent=t;x.style.margin='0 0 8px 8px';x.onclick=function(){try{BesNative[fn]()}catch(e){}};(ds.querySelector('.dlg-b')||ds).appendChild(x);};"
+                + "mk2('mmHome','🏠 اجعلها الشاشة الرئيسية','setHome');mk2('mmCarUi','📻 شاشة العربية الأصلية','openCarLauncher');}"
                 // no-op filter/transform on the live <video> still forces a GPU filter pass every frame on Mali-400: drop them
                 + "var NOF='brightness(100%) contrast(100%) saturate(100%)';var fix=function(el){if(!el)return;if(el.style.filter===NOF)el.style.filter='none';var tf=el.style.transform;if(tf&&tf!=='none')el.setAttribute('data-mmtf',tf);else if(tf==='none'&&!el.getAttribute('data-mmtf'))el.setAttribute('data-mmtf','');if(tf==='rotate(0deg) scale(1, 1)'||tf==='rotate(0deg) scale(1)')el.setAttribute('data-mmtf','');if(tf==='rotate(0deg) scale(1, 1)'||tf==='rotate(0deg) scale(1)')el.style.transform='none';el.style.transition='none';};"
                 + "['video','freeze'].forEach(function(id){var el=document.getElementById(id);if(!el||el.dataset.mmobs)return;el.dataset.mmobs='1';fix(el);new MutationObserver(function(){fix(el)}).observe(el,{attributes:true,attributeFilter:['style']});});"
