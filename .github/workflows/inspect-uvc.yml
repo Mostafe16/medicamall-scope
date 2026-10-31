@@ -1,0 +1,31 @@
+name: Inspect UVC library API (dev helper)
+on:
+  workflow_dispatch:
+  push:
+    branches: [test/car-screen]
+    paths: ['.github/workflows/inspect-uvc.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.9' }
+      - name: Resolve deps
+        run: gradle :app:dependencies --configuration releaseRuntimeClasspath --no-daemon -q | grep -i uvc || true
+      - name: javap
+        run: |
+          set -x
+          for aar in $(find ~/.gradle -iname 'UVCAndroid*.aar' -o -iname 'libuvccamera*.aar' -o -iname 'libausbc*.aar' | sort -u); do
+            echo "== $aar"; d=$(mktemp -d); unzip -q -o "$aar" -d $d
+            jar tf $d/classes.jar | grep -E '^com/(herohan|serenegiant)/.*\.class$' | grep -v '\$' > $d/list.txt
+            cat $d/list.txt
+            for c in com/herohan/uvcapp/ICameraHelper com/herohan/uvcapp/CameraHelper com/herohan/uvcapp/ImageCapture com/herohan/uvcapp/VideoCapture com/serenegiant/usb/UVCCamera; do
+              javap -cp $d/classes.jar -public ${c//\//.} 2>/dev/null || true
+            done
+            for c in 'com.herohan.uvcapp.ImageCapture$OutputFileOptions$Builder' 'com.herohan.uvcapp.VideoCapture$OutputFileOptions$Builder' 'com.herohan.uvcapp.ImageCapture$OnImageCaptureCallback' 'com.herohan.uvcapp.VideoCapture$OnVideoCaptureCallback' 'com.herohan.uvcapp.ImageCapture$OutputFileResults' 'com.herohan.uvcapp.VideoCapture$OutputFileResults'; do javap -cp $d/classes.jar -public "$c" 2>/dev/null || true; done
+          done
