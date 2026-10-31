@@ -32,4 +32,4 @@ jobs:
       - name: Publish output
         if: always()
         env: { GH_TOKEN: '${{ github.token }}' }
-        run: gh release upload car-test /tmp/uvc-api.txt --clobber
+        run: ls -la /tmp/uvc-api.txt; gh release upload car-test /tmp/uvc-api.txt --clobber -R "$GITHUB_REPOSITORY"
