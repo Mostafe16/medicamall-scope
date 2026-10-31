@@ -10,6 +10,10 @@
   var md = navigator.mediaDevices;
   var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
   var connected = function () { try { return N.isConnected(); } catch (e) { return false; } };
+  /* car head unit (weak CPU): cap the live view so the UI stays responsive */
+  var CAR = false; try { CAR = !!(N.isCar && N.isCar()); } catch (e) {}
+  var MIN_GAP = CAR ? 66 : 0; /* ~15 fps */
+  window.__mmPerf = { shown: 0 };
 
   /* ---------------- camera ---------------- */
   var active = null;
@@ -34,7 +38,7 @@
       c.width = sz[0] || 1280; c.height = sz[1] || 720;
       var ctx = c.getContext('2d');
       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, c.width, c.height);
-      var stream = c.captureStream(30);
+      var stream = c.captureStream(CAR ? 15 : 30);
       var t = stream.getVideoTracks()[0];
       var st = { running: true, ended: false };
       var gs = t.getSettings ? t.getSettings.bind(t) : function () { return {}; };
@@ -49,11 +53,14 @@
       (async function loop() {
         while (st.running) {
           try {
-            var r = await fetch('/uvc/frame.jpg?t=' + Date.now(), { cache: 'no-store' });
+            var t0 = Date.now();
+            var r = await fetch('/uvc/frame.jpg?t=' + t0, { cache: 'no-store' });
             if (r.status === 200) {
               var bmp = await createImageBitmap(await r.blob());
               if (c.width !== bmp.width || c.height !== bmp.height) { c.width = bmp.width; c.height = bmp.height; }
               ctx.drawImage(bmp, 0, 0);
+              window.__mmPerf.shown++;
+              if (MIN_GAP) { var spent = Date.now() - t0; if (spent < MIN_GAP) await sleep(MIN_GAP - spent); }
               if (bmp.close) bmp.close();
               first();
             } else { await sleep(60); }

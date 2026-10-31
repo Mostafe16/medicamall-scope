@@ -491,6 +491,7 @@ public class MainActivity extends Activity {
             if (frame == null || frame.length != n) frame = new byte[n];
             buf.get(frame, 0, n);
             seq++;
+            camFrames++;
             frameLock.notifyAll();
         }
     }
@@ -520,12 +521,14 @@ public class MainActivity extends Activity {
             int w2 = w / 2, h2 = h / 2;
             if (half == null || half.length != w2 * h2 * 3 / 2) half = new byte[w2 * h2 * 3 / 2];
             halfNv21(work, w, h, half);
-            return jpeg(half, w2, h2, 80);
+            return jpeg(half, w2, h2, 70);
         }
         try {
             YuvImage yi = new YuvImage(work, ImageFormat.NV21, w, h, null);
             ByteArrayOutputStream bos = new ByteArrayOutputStream(w * h / 4);
-            yi.compressToJpeg(new Rect(0, 0, w, h), BuildConfig.CAR ? 80 : 88, bos);
+            long e0 = SystemClock.uptimeMillis();
+            yi.compressToJpeg(new Rect(0, 0, w, h), BuildConfig.CAR ? 70 : 88, bos);
+            encMs = (encMs * 7 + (SystemClock.uptimeMillis() - e0)) / 8;
             Map<String, String> hd = new HashMap<>();
             hd.put("Cache-Control", "no-store");
             hd.put("Access-Control-Allow-Origin", "*");
@@ -536,6 +539,7 @@ public class MainActivity extends Activity {
     }
 
     private byte[] half, fullWork;
+    private volatile long encMs = 0, camFrames = 0;
 
     /** NV21 → NV21 at half width/height (drop every other pixel / chroma pair). */
     private static void halfNv21(byte[] src, int w, int h, byte[] dst) {
@@ -659,6 +663,13 @@ public class MainActivity extends Activity {
     class Bridge {
         @JavascriptInterface
         public boolean isConnected() { return camOpen; }
+
+        @JavascriptInterface
+        public boolean isCar() { return BuildConfig.CAR; }
+
+        /** car perf overlay: camera frames so far, average JPEG encode ms, frame size */
+        @JavascriptInterface
+        public String perf() { synchronized (frameLock) { return camFrames + "," + encMs + "," + fw + "x" + fh; } }
 
         /** "WxH" of the camera when the live view is downscaled (photos should use /uvc/full.jpg), else "". */
         @JavascriptInterface
@@ -867,6 +878,11 @@ public class MainActivity extends Activity {
                 + "var ds=document.getElementById('dlgSettings');if(ds&&!document.getElementById('mmProbe')){var pb=document.createElement('button');pb.id='mmProbe';pb.className='ghost';pb.type='button';pb.textContent='🛠 تشخيص لوجو التشغيل';pb.style.margin='12px 0';pb.onclick=function(){try{BesNative.logoProbe()}catch(x){}};(ds.querySelector('.dlg-b')||ds).appendChild(pb);"
                 + "var mk=function(id,t,v){var x=document.createElement('button');x.id=id;x.className='ghost';x.type='button';x.textContent=t;x.style.margin='0 0 8px 8px';x.onclick=function(){try{BesNative.bootAnim(v)}catch(e){}};(ds.querySelector('.dlg-b')||ds).appendChild(x);};"
                 + "mk('mmBa1','🎬 أنيميشن تشغيل ميديكا مول',true);mk('mmBa0','↺ أنيميشن المصنع',false);}"
+                // no-op filter/transform on the live <video> still forces a GPU filter pass every frame on Mali-400: drop them
+                + "var NOF='brightness(100%) contrast(100%) saturate(100%)';var fix=function(el){if(!el)return;if(el.style.filter===NOF)el.style.filter='none';var tf=el.style.transform;if(tf==='rotate(0deg) scale(1, 1)'||tf==='rotate(0deg) scale(1)')el.style.transform='none';el.style.transition='none';};"
+                + "['video','freeze'].forEach(function(id){var el=document.getElementById(id);if(!el||el.dataset.mmobs)return;el.dataset.mmobs='1';fix(el);new MutationObserver(function(){fix(el)}).observe(el,{attributes:true,attributeFilter:['style']});});"
+                // small perf readout in the corner of the live view (test builds)
+                + "if(!document.getElementById('mmPerf')&&window.BesNative&&BesNative.perf){var st=document.getElementById('stage');if(st){var pv=document.createElement('div');pv.id='mmPerf';pv.style.cssText='position:absolute;left:8px;bottom:8px;z-index:5;background:rgba(0,0,0,.55);color:#fff;font:12px monospace;padding:2px 8px;border-radius:8px;direction:ltr;pointer-events:none';st.appendChild(pv);var lc=0,ls=0;setInterval(function(){try{var p=String(BesNative.perf()).split(',');var c=+p[0],s=(window.__mmPerf||{}).shown||0;pv.textContent='cam '+(c-lc)+'fps · screen '+(s-ls)+'fps · jpeg '+p[1]+'ms · '+p[2];lc=c;ls=s;}catch(e){}},1000);}}"
                 + "document.documentElement.classList.add('mmcar');};"
                 // on-screen keyboard covers the bottom half of a 600px screen: while typing in a popup, shrink it to the top
                 + "var isField=function(e){return e&&e.matches&&e.matches('input:not([type=range]):not([type=file]):not([type=checkbox]):not([type=radio]),textarea')&&e.closest&&e.closest('dialog');};"
