@@ -20,7 +20,10 @@ jobs:
       - name: javap
         run: |
           exec > >(tee /tmp/uvc-api.txt) 2>&1
-          for aar in $(find ~/.gradle -iname 'UVCAndroid*.aar' -o -iname 'libuvccamera*.aar' -o -iname 'libausbc*.aar' | sort -u); do
+          mkdir -p /tmp/aar; cd /tmp/aar
+          for u in https://repo1.maven.org/maven2/com/herohan/UVCAndroid/1.0.13/UVCAndroid-1.0.13.aar https://jitpack.io/com/herohan/UVCAndroid/1.0.13/UVCAndroid-1.0.13.aar; do curl -fsSL -o uvc.aar "$u" && echo "got $u" && break; done
+          ls -la /tmp/aar
+          for aar in /tmp/aar/uvc.aar; do
             echo "== $aar"; d=$(mktemp -d); unzip -q -o "$aar" -d $d
             jar tf $d/classes.jar | grep -E '^com/(herohan|serenegiant)/.*\.class$' | grep -v '\$' > $d/list.txt
             cat $d/list.txt
