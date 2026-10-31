@@ -29,7 +29,12 @@ jobs:
             done
             for c in 'com.herohan.uvcapp.ImageCapture$OutputFileOptions$Builder' 'com.herohan.uvcapp.VideoCapture$OutputFileOptions$Builder' 'com.herohan.uvcapp.ImageCapture$OnImageCaptureCallback' 'com.herohan.uvcapp.VideoCapture$OnVideoCaptureCallback' 'com.herohan.uvcapp.ImageCapture$OutputFileResults' 'com.herohan.uvcapp.VideoCapture$OutputFileResults'; do javap -cp $d/classes.jar -public "$c" 2>/dev/null || true; done
           done
-      - name: Publish output
+      - name: Publish output as annotations
         if: always()
-        env: { GH_TOKEN: '${{ github.token }}' }
-        run: ls -la /tmp/uvc-api.txt; gh release upload car-test /tmp/uvc-api.txt --clobber -R "$GITHUB_REPOSITORY"
+        run: |
+          python3 - <<'PY'
+          t=open('/tmp/uvc-api.txt',errors='replace').read()
+          t=t.replace('%','%25').replace('\r','').replace('\n','%0A')
+          for k in range(0,min(len(t),9*30000),30000):
+              print('::notice title=uvc'+str(k//30000)+'::'+t[k:k+30000])
+          PY
