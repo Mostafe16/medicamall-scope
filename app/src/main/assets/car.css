@@ -66,3 +66,16 @@ html.kb dialog .dlg-h{padding:6px 14px!important}
 html.kb dialog .dlg-f{padding:6px 14px!important}
 @supports not (inset:0){.stage video,.stage canvas.freeze,.placeholder,.flash{top:0;right:0;bottom:0;left:0}}
 @supports not (aspect-ratio:1){.item{height:70px}.mainbtns button{margin:0 5px}.toolbar>*,.actions>*,.chips>*{margin:3px}}
+/* full-screen live view (⛶): stage takes the whole screen, capture buttons float over it */
+html.mmfull header,html.mmfull aside{display:none!important}
+html.mmfull main{padding:0!important;gap:0!important;grid-template-columns:1fr!important}
+html.mmfull .stage{border-radius:0!important}
+html.mmfull main>section.card>.toolbar{position:absolute;left:0;right:0;bottom:14px;z-index:25;margin:0!important;pointer-events:none;justify-content:center}
+html.mmfull .mainbtns{width:auto!important;max-width:720px;margin:0 auto;pointer-events:auto}
+html.mmfull .mainbtns button{min-height:50px!important;font-size:17px!important;opacity:.93;box-shadow:0 6px 18px rgba(0,0,0,.35)!important}
+html.mmfull .mainbtns .mm-side{background:rgba(255,255,255,.92)!important}
+html.mmfull .tools{top:16px;left:16px;max-height:calc(100% - 110px)}
+#btnFull{display:none!important}
+.mainbtns button{white-space:nowrap}
+.mainbtns .mm-side{font-size:15px!important;padding:8px 10px!important}
+html.mmfull .mainbtns button{flex:none!important;padding:8px 20px!important}
