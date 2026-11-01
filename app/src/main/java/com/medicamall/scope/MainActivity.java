@@ -72,6 +72,47 @@ public class MainActivity extends Activity {
     static final int REQ_PERMS = 7, REQ_FILE = 42;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
+
+    // ---- car edition: only ever one exam screen (home screen copy wins) ----
+    static java.lang.ref.WeakReference<MainActivity> sLive;
+    private boolean homeInstance = false;
+
+    static boolean isHomeLaunch(Intent i) {
+        if (i == null) return false;
+        if (i.getComponent() != null && i.getComponent().getClassName().endsWith("HomeAlias")) return true;
+        return Intent.ACTION_MAIN.equals(i.getAction()) && i.hasCategory(Intent.CATEGORY_HOME);
+    }
+
+    /** bring an existing exam screen to the front (used by UsbEntry / duplicates) */
+    static boolean bringLiveToFront(android.content.Context c) {
+        MainActivity m = sLive == null ? null : sLive.get();
+        if (m == null || m.isFinishing() || m.isDestroyed()) return false;
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager) c.getSystemService(ACTIVITY_SERVICE);
+            am.moveTaskToFront(m.getTaskId(), 0);
+            return true;
+        } catch (Throwable t) { return false; }
+    }
+
+    /** false = this copy is a duplicate and has been closed */
+    private boolean claimSingleInstance() {
+        homeInstance = isHomeLaunch(getIntent());
+        MainActivity old = sLive == null ? null : sLive.get();
+        if (old != null && old != this && !old.isFinishing() && !old.isDestroyed()) {
+            if (homeInstance && !old.homeInstance) {
+                // the home-screen copy replaces a copy opened from the app icon / USB
+                try { old.finishAndRemoveTask(); } catch (Throwable t) { old.finish(); }
+            } else {
+                // a second copy (icon, USB, boot): close it and show the one that is already running
+                bringLiveToFront(this);
+                finish();
+                overridePendingTransition(0, 0);
+                return false;
+            }
+        }
+        sLive = new java.lang.ref.WeakReference<>(this);
+        return true;
+    }
     private WebView web;
     private WebViewAssetLoader assets;
 
@@ -105,6 +146,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        if (BuildConfig.CAR && !claimSingleInstance()) return;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         WebView.setWebContentsDebuggingEnabled(true);
 
@@ -1089,6 +1131,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (sLive != null && sLive.get() == this) sLive = null;
         camOpen = false;
         if (cam != null) {
             try { cam.release(); } catch (Throwable ignored) { }

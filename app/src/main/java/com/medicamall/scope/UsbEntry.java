@@ -14,6 +14,7 @@ public class UsbEntry extends Activity {
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        if (MainActivity.bringLiveToFront(this)) { finish(); return; }
         try {
             Intent home = new Intent(Intent.ACTION_MAIN);
             home.addCategory(Intent.CATEGORY_HOME);
