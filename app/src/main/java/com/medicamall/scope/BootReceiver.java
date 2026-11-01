@@ -16,7 +16,10 @@ public class BootReceiver extends BroadcastReceiver {
         // give the head unit's own launcher a few seconds to settle, then come to the front
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             try {
-                Intent i = new Intent(app, MainActivity.class);
+                // bring up the home-screen copy (never a second one on top of it)
+                Intent i = new Intent(Intent.ACTION_MAIN);
+                i.addCategory(Intent.CATEGORY_HOME);
+                i.setPackage(app.getPackageName());
                 i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
                 app.startActivity(i);
             } catch (Throwable ignored) { }

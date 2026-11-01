@@ -31,7 +31,7 @@ android {
         buildConfigField 'String', 'APK_NAME', car ? '"MedicaMall-Scope-Car.apk"' : (wajha2 ? '"MedicaMall-Scope-Wajha2.apk"' : '"MedicaMall-Scope.apk"')
         buildConfigField 'boolean', 'CAR', car ? 'true' : 'false'
         // car edition only: open the app automatically when the head unit boots
-        manifestPlaceholders = [carOnly: car ? 'true' : 'false']
+        manifestPlaceholders = [carOnly: car ? 'true' : 'false', notCar: car ? 'false' : 'true']
     }
 
     buildFeatures { buildConfig true }

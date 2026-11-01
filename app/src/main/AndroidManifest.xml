@@ -32,7 +32,31 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- open automatically when the scope is plugged in -->
+        </activity>
+
+        <!-- open automatically when the scope is plugged in (all builds except the car edition) -->
+        <activity-alias
+            android:name=".UsbAlias"
+            android:targetActivity=".MainActivity"
+            android:enabled="${notCar}"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/mm_usb_filter" />
+        </activity-alias>
+
+        <!-- car edition: plugging the scope brings back the exam screen that is already open (the home screen)
+             instead of starting a second copy on top of it -->
+        <activity
+            android:name=".UsbEntry"
+            android:enabled="${carOnly}"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
             </intent-filter>
