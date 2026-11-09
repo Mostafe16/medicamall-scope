@@ -1,3 +1,6 @@
+// Medica Mall Scope (Capture) – separate test build of the Windows app for the analog "1CH USB Video Capture" dongle
+// (Somagic "SMI Grabber Device", USB 1C88). Installs side by side with the normal app (own folder, shortcut and updates)
+// and carries the dongle's Windows driver (drivers\SmiGrabberDriver.exe, from the dongle's CD).
 // Medica Mall Scope – Windows app
 // Same exam screen as medicamall.com/ent-scope, inside WebView2. The Besdata scope is read natively (DirectShow):
 // live video is served to the page at /uvc/frame.jpg and the scope's hardware button (UVC still-pin trigger)
@@ -10,6 +13,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Management;
 using System.Net;
 using System.Net.Http;
 using System.Reflection;
@@ -36,8 +40,8 @@ namespace MedicaMallScope
             bool background = Environment.GetCommandLineArgs().Any(a => a == "--background");
             if (!background && Installer.RunInstalledCopyIfNeeded()) return;
             bool created, first;
-            using (var showEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "MedicaMallScope_Show", out created))
-            using (var mutex = new Mutex(true, "MedicaMallScope_SingleInstance", out first))
+            using (var showEvt = new EventWaitHandle(false, EventResetMode.AutoReset, "MedicaMallScopeCapture_Show", out created))
+            using (var mutex = new Mutex(true, "MedicaMallScopeCapture_SingleInstance", out first))
             {
                 // already running (maybe hidden in the tray): ask it to show its window
                 if (!first) { if (!background) showEvt.Set(); return; }
@@ -48,12 +52,12 @@ namespace MedicaMallScope
 
     static class Paths
     {
-        public static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MedicaMallScope");
+        public static readonly string Root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MedicaMallScopeCapture");
         public static readonly string App = Path.Combine(Root, "app");
         public static readonly string Web = Path.Combine(Root, "web");
         public static readonly string Data = Path.Combine(Root, "WebView2");
         public static string ExeDir { get { return AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'); } }
-        public const string ExeName = "MedicaMallScope.exe";
+        public const string ExeName = "MedicaMallScopeCapture.exe";
 
         public static void Log(string s)
         {
@@ -106,7 +110,7 @@ namespace MedicaMallScope
             {
                 try
                 {
-                    string lnk = Path.Combine(folder, "Medica Mall Scope.lnk");
+                    string lnk = Path.Combine(folder, "Medica Mall Scope (Capture).lnk");
                     if (force || !File.Exists(lnk)) MakeShortcut(lnk, exe);
                 }
                 catch (Exception ex) { Paths.Log("shortcut: " + ex.Message); }
@@ -121,7 +125,7 @@ namespace MedicaMallScope
             var lt = lnk.GetType();
             lt.InvokeMember("TargetPath", BindingFlags.SetProperty, null, lnk, new object[] { target });
             lt.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, new object[] { Path.GetDirectoryName(target) });
-            lt.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, new object[] { "Medica Mall – Besdata ENT scope" });
+            lt.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, new object[] { "Medica Mall – scope via USB video capture" });
             lt.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
         }
     }
@@ -148,9 +152,18 @@ namespace MedicaMallScope
         static readonly ImageCodecInfo JpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.MimeType == "image/jpeg");
 
         public string DevicePath;
-        public bool Running, HasButton, IsOto;
+        public bool Running, HasButton, IsOto, IsGrab;
         public int W = 1280, H = 720;
         public event Action Button;
+
+        // the analog USB capture dongle (Somagic SMI Grabber / EasyCAP-type, USB 1C88:xxxx)
+        public static bool IsCapture(DsDevice d)
+        {
+            string n = ((d == null ? null : d.Name) ?? "").ToLowerInvariant();
+            string p = ((d == null ? null : d.DevicePath) ?? "").ToLowerInvariant();
+            return n.Contains("smi grabber") || n.Contains("usb video capture") || n.Contains("easycap") || n.Contains("somagic") ||
+                   n.Contains("usbtv") || n.Contains("usb 2861") || p.Contains("vid_1c88");
+        }
 
         public static bool IsOtoscope(DsDevice d)
         {
@@ -161,17 +174,19 @@ namespace MedicaMallScope
         // the scope (Besdata) first; otherwise the Video Otoscope (USB 1224:2825)
         public static DsDevice Find()
         {
-            DsDevice scope = null, oto = null;
+            DsDevice scope = null, oto = null, grab = null;
             foreach (var d in DsDevice.GetDevicesOfCat(FilterCategory.VideoInputDevice))
             {
                 string n = (d.Name ?? "").ToLowerInvariant();
                 if (scope == null && (n.Contains("besdata") || n.Contains("endoscope"))) scope = d;
+                else if (grab == null && IsCapture(d)) grab = d;
                 // the otoscope has no still-image pin and no HID (Button Spy, 2026-10-10): its button can't reach the PC,
                 // so it stays a normal Windows camera (WebView2) – the app does not hold it natively
                 else if (oto == null && false && IsOtoscope(d)) oto = d;
                 else d.Dispose();
             }
-            if (scope != null) { if (oto != null) oto.Dispose(); return scope; }
+            if (scope != null) { if (oto != null) oto.Dispose(); if (grab != null) grab.Dispose(); return scope; }
+            if (grab != null) { if (oto != null) oto.Dispose(); return grab; }
             return oto;
         }
 
@@ -188,8 +203,11 @@ namespace MedicaMallScope
                 IBaseFilter cap;
                 Chk(graph.AddSourceFilterForMoniker(dev.Mon, null, dev.Name, out cap), "AddSourceFilter");
 
+                bool grabDev = IsCapture(dev);
+                if (grabDev) SetupAnalog(builder, cap);
+
                 IPin capPin = DsFindPin.ByCategory(cap, PinCategory.Capture, 0);
-                if (capPin != null) PickBestFormat(capPin);
+                if (capPin != null) PickBestFormat(capPin, grabDev ? (AnalogSettings.Pal ? 576 : 480) : 1920);
 
                 // live video -> RGB24 grabber
                 capGrab = (ISampleGrabber)new SampleGrabber();
@@ -199,6 +217,7 @@ namespace MedicaMallScope
                 var nr = (IBaseFilter)new NullRenderer();
                 graph.AddFilter(gf, "CapGrab"); graph.AddFilter(nr, "CapNull");
                 Chk(builder.RenderStream(PinCategory.Capture, MediaType.Video, cap, gf, nr), "Render capture");
+                if (grabDev) SetupAnalog(builder, cap); // RenderStream adds the dongle's crossbar filter: route its input now
                 var cm = new AMMediaType();
                 Chk(capGrab.GetConnectedMediaType(cm), "GetConnectedMediaType");
                 var vih = (VideoInfoHeader)Marshal.PtrToStructure(cm.formatPtr, typeof(VideoInfoHeader));
@@ -246,6 +265,7 @@ namespace MedicaMallScope
                 }
                 DevicePath = dev.DevicePath;
                 IsOto = IsOtoscope(dev);
+                IsGrab = grabDev;
                 Running = true;
                 Paths.Log("scope started: " + dev.Name + " " + W + "x" + H + " button=" + HasButton);
                 return true;
@@ -258,7 +278,47 @@ namespace MedicaMallScope
             }
         }
 
-        void PickBestFormat(IPin pin)
+        // analog dongle: route the chosen input (composite / S-Video) to the decoder and set PAL / NTSC
+        static void SetupAnalog(ICaptureGraphBuilder2 builder, IBaseFilter cap)
+        {
+            try
+            {
+                object o;
+                if (builder.FindInterface(null, null, cap, typeof(IAMCrossbar).GUID, out o) >= 0 && o is IAMCrossbar)
+                {
+                    var xb = (IAMCrossbar)o;
+                    int outs, ins;
+                    xb.get_PinCounts(out outs, out ins);
+                    var want = AnalogSettings.SVideo ? PhysicalConnectorType.Video_SVideo : PhysicalConnectorType.Video_Composite;
+                    for (int oi = 0; oi < outs; oi++)
+                    {
+                        int rel; PhysicalConnectorType ot;
+                        xb.get_CrossbarPinInfo(false, oi, out rel, out ot);
+                        if (ot != PhysicalConnectorType.Video_VideoDecoder) continue;
+                        for (int ii = 0; ii < ins; ii++)
+                        {
+                            PhysicalConnectorType it;
+                            xb.get_CrossbarPinInfo(true, ii, out rel, out it);
+                            if (it == want) { Paths.Log("crossbar " + it + " -> decoder: 0x" + xb.Route(oi, ii).ToString("X8")); break; }
+                        }
+                    }
+                }
+                else Paths.Log("no crossbar on the capture device");
+            }
+            catch (Exception ex) { Paths.Log("crossbar: " + ex.Message); }
+            try
+            {
+                var dec = cap as IAMAnalogVideoDecoder;
+                if (dec != null)
+                {
+                    var std = AnalogSettings.Pal ? AnalogVideoStandard.PAL_B : AnalogVideoStandard.NTSC_M;
+                    Paths.Log("tv format " + std + ": 0x" + dec.put_TVFormat(std).ToString("X8"));
+                }
+            }
+            catch (Exception ex) { Paths.Log("tv format: " + ex.Message); }
+        }
+
+        void PickBestFormat(IPin pin, int maxH)
         {
             var sc = pin as IAMStreamConfig;
             if (sc == null) return;
@@ -276,7 +336,7 @@ namespace MedicaMallScope
                     {
                         var v = (VideoInfoHeader)Marshal.PtrToStructure(mt.formatPtr, typeof(VideoInfoHeader));
                         int w = v.BmiHeader.Width, h = Math.Abs(v.BmiHeader.Height);
-                        if (w <= 1920 && h <= 1920)
+                        if (w <= 1920 && h <= maxH)
                         {
                             long score = (long)w * h * 2 + (mt.subType == MediaSubType.MJPG ? 1 : 0);
                             if (score > bestScore) { bestScore = score; best = i; }
@@ -435,6 +495,56 @@ namespace MedicaMallScope
         static string Esc(string s) { return (s ?? "").Replace("\\", "\\\\").Replace("\"", "\\\""); }
     }
 
+    // ---------------------------------------------------------------- capture dongle: input / TV system (saved per PC)
+    static class AnalogSettings
+    {
+        static string FileP { get { return Path.Combine(Paths.Root, "analog.txt"); } }
+        static string Read() { try { return File.Exists(FileP) ? File.ReadAllText(FileP) : ""; } catch { return ""; } }
+        static void Write(bool sv, bool pal) { try { Directory.CreateDirectory(Paths.Root); File.WriteAllText(FileP, (sv ? "svideo" : "composite") + " " + (pal ? "pal" : "ntsc")); } catch { } }
+        public static bool SVideo { get { return Read().Contains("svideo"); } set { Write(value, Pal); } }
+        public static bool Pal { get { return !Read().Contains("ntsc"); } set { Write(SVideo, value); } } // Egypt = PAL
+    }
+
+    // ---------------------------------------------------------------- capture dongle driver (Somagic SMI USB Grabber, bundled)
+    static class GrabberDriver
+    {
+        public static string Setup { get { return Path.Combine(Paths.ExeDir, "drivers", "SmiGrabberDriver.exe"); } }
+
+        // true when a Somagic dongle (USB VID 1C88) is plugged in but Windows has no working driver for it
+        public static bool PluggedWithoutDriver()
+        {
+            try
+            {
+                using (var q = new ManagementObjectSearcher("SELECT Name, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE DeviceID LIKE '%VID_1C88%'"))
+                {
+                    bool seen = false, ok = false;
+                    foreach (ManagementObject m in q.Get())
+                    {
+                        seen = true;
+                        object e = m["ConfigManagerErrorCode"];
+                        if (e != null && Convert.ToInt32(e) == 0) ok = true;
+                        Paths.Log("dongle pnp: " + m["Name"] + " err=" + e);
+                    }
+                    return seen && !ok;
+                }
+            }
+            catch (Exception ex) { Paths.Log("dongle pnp: " + ex.Message); return false; }
+        }
+
+        public static void Install(IWin32Window owner)
+        {
+            if (!File.Exists(Setup)) { MessageBox.Show(owner, "ملف التعريف مش موجود جنب البرنامج.", "Medica Mall", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            try
+            {
+                Process.Start(new ProcessStartInfo(Setup) { UseShellExecute = true, Verb = "runas", WorkingDirectory = Path.GetDirectoryName(Setup) });
+                Paths.Log("driver setup started");
+                MessageBox.Show(owner, "كمّل خطوات تسطيب التعريف (Next / Install).\nبعد ما يخلص: شيل كارت الكاميرا من الـ USB ورجّعه تاني، والصورة هتظهر لوحدها.",
+                    "Medica Mall – تعريف كارت الكاميرا", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex) { Paths.Log("driver setup: " + ex.Message); }
+        }
+    }
+
     // ---------------------------------------------------------------- exam screen (web app) files
     static class WebApp
     {
@@ -473,7 +583,7 @@ namespace MedicaMallScope
     {
         // exam screen: web/index.html in the public repo (plain HTML)
         const string SiteUrl = "https://raw.githubusercontent.com/Mostafe16/medicamall-scope/main/web/index.html";
-        const string Rel = "https://github.com/Mostafe16/medicamall-scope/releases/download/win-app/";
+        const string Rel = "https://github.com/Mostafe16/medicamall-scope/releases/download/capture-test/";
 
         static HttpClient Http()
         {
@@ -524,7 +634,7 @@ namespace MedicaMallScope
                 Directory.CreateDirectory(tmp);
                 string zip = Path.Combine(tmp, "app.zip"), src = Path.Combine(tmp, "files");
                 byte[] bytes;
-                using (var c = Http()) bytes = await c.GetByteArrayAsync(Rel + "MedicaMallScope.zip?t=" + DateTime.UtcNow.Ticks);
+                using (var c = Http()) bytes = await c.GetByteArrayAsync(Rel + "MedicaMallScope-Capture.zip?t=" + DateTime.UtcNow.Ticks);
                 File.WriteAllBytes(zip, bytes);
                 ZipFile.ExtractToDirectory(zip, src);
                 if (!File.Exists(Path.Combine(src, Paths.ExeName))) throw new Exception("update package incomplete");
@@ -548,7 +658,7 @@ namespace MedicaMallScope
     class MainForm : Form
     {
         const string Host = "https://scope.medicamall.local";
-        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run", RunName = "MedicaMallScope";
+        const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run", RunName = "MedicaMallScopeCapture";
         readonly WebView2 web = new WebView2 { Dock = DockStyle.Fill };
         readonly ScopeCamera cam = new ScopeCamera();
         readonly System.Windows.Forms.Timer poll = new System.Windows.Forms.Timer { Interval = 2000 };
@@ -565,7 +675,7 @@ namespace MedicaMallScope
         {
             allowShow = !background;
             lastPresent = !background; // started in the background: a scope that is already plugged in opens the window
-            Text = "Medica Mall – شاشة كشف منظار الأنف والأذن";
+            Text = "Medica Mall – شاشة كشف المنظار (كارت الكاميرا)";
             Width = 1280; Height = 820; StartPosition = FormStartPosition.CenterScreen; WindowState = FormWindowState.Maximized;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             Controls.Add(web);
@@ -583,9 +693,17 @@ namespace MedicaMallScope
             autoItem.Click += (s, e) => SetAutoStart(!autoItem.Checked);
             menu.Items.Add(autoItem);
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("تسطيب تعريف كارت الكاميرا (SMI Grabber)", null, (s, e) => GrabberDriver.Install(this));
+            var svItem = new ToolStripMenuItem("كارت الكاميرا: مدخل S-Video (بدل الأصفر Composite)") { Checked = AnalogSettings.SVideo };
+            svItem.Click += (s, e) => { AnalogSettings.SVideo = svItem.Checked = !svItem.Checked; RestartCam(); };
+            var ntscItem = new ToolStripMenuItem("كارت الكاميرا: نظام NTSC (بدل PAL)") { Checked = !AnalogSettings.Pal };
+            ntscItem.Click += (s, e) => { ntscItem.Checked = !ntscItem.Checked; AnalogSettings.Pal = !ntscItem.Checked; RestartCam(); };
+            menu.Items.Add(svItem);
+            menu.Items.Add(ntscItem);
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("خروج نهائي", null, (s, e) => ExitApp());
             tray.Icon = Icon ?? SystemIcons.Application;
-            tray.Text = "Medica Mall Scope";
+            tray.Text = "Medica Mall Scope (Capture)";
             tray.ContextMenuStrip = menu;
             tray.Visible = true;
             tray.DoubleClick += (s, e) => ShowApp();
@@ -629,6 +747,34 @@ namespace MedicaMallScope
             EnsureInit();
             BeginInvoke(new Action(Tick));
             if (inited && web.CoreWebView2 != null && DateTime.Now - lastUpdateCheck > TimeSpan.FromHours(6)) CheckUpdates();
+        }
+
+        void RestartCam()
+        {
+            if (cam.Running) { cam.Stop(); Event("detached"); }
+            nextStartTry = DateTime.MinValue;
+            Tick();
+        }
+
+        bool driverAsked;
+        void CheckDriver()
+        {
+            if (driverAsked) return;
+            driverAsked = true;
+            var _ = Task.Run(() => GrabberDriver.PluggedWithoutDriver()).ContinueWith(t =>
+            {
+                if (!t.Result) return;
+                try
+                {
+                    BeginInvoke(new Action(() =>
+                    {
+                        if (MessageBox.Show(this, "كارت الكاميرا (USB Video Capture) متوصل بس التعريف بتاعه مش متسطب.\nأسطّب التعريف دلوقتي؟",
+                                "Medica Mall – تعريف كارت الكاميرا", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                            GrabberDriver.Install(this);
+                    }));
+                }
+                catch { }
+            });
         }
 
         public void ExitApp()
@@ -734,6 +880,7 @@ namespace MedicaMallScope
             };
             cw.Navigate(Host + "/index.html");
             Tick();
+            CheckDriver();
             CheckUpdates();
         }
 
