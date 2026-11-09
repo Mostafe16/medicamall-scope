@@ -730,10 +730,37 @@ namespace MedicaMallScope
                 try { m = e.TryGetWebMessageAsString(); } catch { }
                 if (m == "reloadWeb") cw.Reload();
                 else if (m != null && m.StartsWith("log:")) Paths.Log("web: " + m.Substring(4));
+                else if (m != null && m.StartsWith("wa:")) ShareWhatsApp(m.Substring(3));
             };
             cw.Navigate(Host + "/index.html");
             Tick();
             CheckUpdates();
+        }
+
+        // Report → WhatsApp: the PDF goes to the clipboard (Ctrl+V in the chat) and the patient's chat opens with the message.
+        // payload: phone \n base64(utf8 text) \n base64(utf8 file name) \n base64(pdf)
+        static void ShareWhatsApp(string payload)
+        {
+            try
+            {
+                var p = payload.Split(new[] { '\n' }, 4);
+                if (p.Length < 4) return;
+                string phone = Regex.Replace(p[0], "\\D", "");
+                string text = Encoding.UTF8.GetString(Convert.FromBase64String(p[1]));
+                string name = Encoding.UTF8.GetString(Convert.FromBase64String(p[2]));
+                foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
+                if (name.Length == 0) name = "report.pdf";
+                string dir = Path.Combine(Path.GetTempPath(), "ScopeReports");
+                Directory.CreateDirectory(dir);
+                string file = Path.Combine(dir, name);
+                System.IO.File.WriteAllBytes(file, Convert.FromBase64String(p[3]));
+                var list = new System.Collections.Specialized.StringCollection { file };
+                try { Clipboard.SetFileDropList(list); } catch (Exception ex) { Paths.Log("wa clipboard: " + ex.Message); }
+                string q = (phone.Length > 0 ? "phone=" + phone + "&" : "") + "text=" + Uri.EscapeDataString(text);
+                try { Process.Start(new ProcessStartInfo("whatsapp://send?" + q) { UseShellExecute = true }); }
+                catch { OpenExternal("https://web.whatsapp.com/send?" + q); }
+            }
+            catch (Exception ex) { Paths.Log("wa: " + ex.Message); }
         }
 
         async void CheckUpdates()
