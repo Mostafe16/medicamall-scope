@@ -4,6 +4,7 @@
 (function () {
   var W = window.chrome && window.chrome.webview;
   if (!W) return;
+  window.__besWa = 1; // the app can send the report to WhatsApp (file → clipboard + open the chat)
   var FAKE = 'besdata-usb-native', SCOPE_RE = /besdata|endoscope/i, OTO_RE = /1224:2825/i;
   /* label of the device the app holds natively – the otoscope keeps its USB id so the exam screen can pick its mode */
   var LABEL = function () { return S.kind === 'oto' ? 'USB Otoscope (1224:2825)' : 'BESDATA Endoscope (USB)'; };

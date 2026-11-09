@@ -1298,6 +1298,448 @@ $('docName').oninput = () => { S.doctor = $('docName').value; store.set('doctor'
   } catch {}
   checkDevices(false); // remember what's plugged in now, so the next plug-in is detected
 })();
+
+/* ===== bx-addon: language + report + WhatsApp ===== */
+/* ===== AR/EN language + PDF report + WhatsApp to the patient (shared by Medica Mall & clinic screens) ===== */
+(function(){
+const IS_CLINIC = typeof BUILTIN_LOGO_REPORT !== 'undefined';
+const LKEY = IS_CLINIC ? 'clinic_lang' : 'bes_lang';
+let LANG = 'ar'; try { LANG = localStorage.getItem(LKEY) === 'en' ? 'en' : 'ar'; } catch {}
+const isEn = () => LANG === 'en';
+
+/* ---------- dictionary (Arabic UI text → English) ---------- */
+const D = new Map([
+['+ مريض جديد','+ New patient'],['· الأذن','· Ear'],['أبلكيشن ميديكا مول للمنظار','Medica Mall Scope app'],['أذن','Ear'],['أذن يمين','Right ear'],['أذن شمال','Left ear'],
+['أعلى دقة متاحة','Highest available'],['أنثى','Female'],['ذكر','Male'],['أوتوسكوب (USB)','Otoscope (USB)'],['إغلاق','Close'],['إلغاء','Cancel'],['إلغاء التجميد','Unfreeze'],
+['ابدأ جلسة لمريض علشان الصور تتحفظ في ملفه','Start a patient session so photos are saved to their file'],['اختصارات الكيبورد:','Keyboard shortcuts:'],['اختيار الكاميرا','Select camera'],
+['ارسم التوقيع (بالماوس أو بالصباع)','Draw the signature (mouse or finger)'],['ارسم التوقيع الأول','Draw the signature first'],
+['استرجاع إعدادات العيادة كمان؟ (الاسم، الطبيب، التوقيع، اللوجو)','Also restore clinic settings? (name, doctor, signature, logo)'],
+['(المرضى الموجودين حاليًا مش هيتمسحوا)','(Existing patients will not be deleted)'],
+['إعادة ضبط بيانات العيادة والإعدادات؟','Reset clinic data and settings?'],['(اسم العيادة، الطبيب، التوقيع، لوجو العيادة، الكاميرا، التدوير والميرور)','(clinic name, doctor, signature, clinic logo, camera, rotation and mirror)'],
+['سجل المرضى والصور والفيديوهات مش هيتمسحوا.','Patient records, photos and videos will not be deleted.'],
+['اسم الطبيب','Doctor name'],['اسم الطبيب (بالإنجليزي، مثال: Ahmed Mohamed)','Doctor name (in English, e.g. Ahmed Mohamed)'],
+['اسم العيادة / التخصص في التقرير (اكتبه بالإنجليزي – التقرير إنجليزي)','Clinic name / specialty on the report'],['اسم العيادة في التقرير','Clinic name on the report'],
+['اسم المريض','Patient name'],['اسم المريض *','Patient name *'],['اسم المريض * (بالإنجليزي للتقرير)','Patient name * (English for the report)'],
+['اسمح بإذن الكاميرا من علامة القفل جنب الرابط','Allow camera permission from the lock icon next to the address'],['اسمح بالنوافذ المنبثقة','Allow pop-up windows'],
+['اضغط على الصورة لتحديدها، ودوستين لفتحها. كل حاجة بتتحفظ على الجهاز ده بس (مش على الإنترنت).','Tap a photo to select it, double-tap to open it. Everything is saved on this device only (not online).'],
+['افتح الموقع من Chrome أو Edge وعلى https','Open the site in Chrome or Edge over https'],
+['افصل الكابل من الجهاز ووصّله تاني (والجهاز شغال) ← البث هيرجع لوحده.','Unplug the cable from the device and plug it back in (device on) → the live view comes back by itself.'],
+['اقفل الجهاز','Turn the device off'],['الأذن','Ear'],['الأذن اللي بيتكشف عليها – بتتكتب على كل صورة وفي التقرير','Ear being examined – written on every photo and in the report'],
+['الأذن اليسرى','Left ear'],['الأذن اليمنى','Right ear'],['الأذن يمين','Ear: right'],['الأذن شمال','Ear: left'],['الأذن اليمنى','Right ear'],['الأوتوسكوب','Otoscope'],['الأوتوسكوب اتفصل','Otoscope disconnected'],['الأوتوسكوب متوصل','Otoscope connected'],
+['الإضاءة (Brightness)','Brightness'],['الإعدادات','Settings'],['التاريخ','Date'],['التباين (Contrast)','Contrast'],['التخزين المحلي مش متاح في المتصفح ده','Local storage is not available in this browser'],
+['التوقيع اتمسح','Signature cleared'],['الجهاز','Device'],['الجهاز فاضي – مفيش صور أو فيديوهات','The device is empty – no photos or videos'],['الدقة','Resolution'],
+['الزرار اللي في نص الجهاز: في وضع الصورة بيصوّر، وفي وضع الفيديو بيشغّل ويوقف التسجيل','The button on the device: in photo mode it takes a photo, in video mode it starts/stops recording'],
+['السن','Age'],['السن / النوع','Age / Sex'],['السيرفر مانع الكاميرا (Permissions-Policy) – لازم يتعدل في إعدادات الموقع','The server blocks the camera (Permissions-Policy) – fix it in the site settings'],
+['الصور محفوظة محليًا على الجهاز','Photos are stored locally on this device'],['الصورة غامقة أو منورة زيادة – قرّب الجهاز من شاش أبيض وجرّب تاني','Image too dark or too bright – point at white gauze and try again'],
+['الصورة متجمدة','Image frozen'],['الطبيب المعالج','Physician'],['الفحص / ملاحظات','Examination / Notes'],['الفيديو هيتسجل من غير صوت','Video will be recorded without sound'],['الكاميرا','Camera'],
+['الكاميرا متقفلة للموقع ده – اسمح بيها من علامة القفل جنب الرابط','Camera is blocked for this site – allow it from the lock icon next to the address'],['الكاميرا مش شغالة','Camera is off'],
+['الكاميرا مفتوحة في برنامج تاني – اقفل Camera أو برنامج Besdata','Camera is open in another program – close Camera or the Besdata program'],
+['الكاميرا مفتوحة في برنامج تاني – اقفل Camera أو برنامج المنظار التاني','Camera is open in another program – close Camera or the other scope program'],
+['المتصفح مش بيدعم الكاميرا','This browser does not support the camera'],['المتصفح مش بيدعم تسجيل الفيديو','This browser does not support video recording'],['المريض الحالي','Current patient'],
+['المشاركة مش متاحة هنا – الملف اتحمّل، ابعته من واتساب','Sharing is not available here – the file was downloaded, send it from WhatsApp'],
+['الملف ده مش نسخة احتياطية صحيحة من Medica Mall Scope','This file is not a valid Medica Mall Scope backup'],['المنظار','Scope'],['المنظار (USB)','Scope (USB)'],['المنظار اتفصل','Scope disconnected'],['المنظار متوصل','Scope connected'],
+['المنظار مش ظاهر – شغال على كاميرا اللابتوب. وصّل المنظار وهيتحوّل لوحده','Scope not detected – using the laptop camera. Plug in the scope and it switches automatically'],
+['المنظار مش متوصل – وصّله واضغط تشغيل','Scope not connected – plug it in and press Start'],['الموبايل','Mobile'],['الميرور اتلغى','Mirror off'],['الميرور شغال','Mirror on'],
+['النسخ مش متاح هنا – استخدم التحميل','Copy is not available here – use Download'],['النوع','Sex'],['الوايت بالانس اتقفل','White balance off'],['اليسرى','left'],['اليمنى','right'],
+['بحث بالاسم أو الموبايل','Search by name or mobile'],['بدء الجلسة','Start session'],['بدء/إيقاف تسجيل ·','Start/stop recording ·'],['بدون مريض','No patient'],
+['برنامج ميديكا مول للكمبيوتر (Windows)','Medica Mall program for Windows'],['تجاهل','Ignore'],['تجميد ·','Freeze ·'],['تجميد الصورة','Freeze image'],['تحديث قايمة الكاميرات','Refresh camera list'],
+['تحديد الكل','Select all'],['تحميل','Download'],['تحميل PDF','Download PDF'],['تحميل الكل','Download all'],['تحميل الملفات','Download files'],['تدوير ⟳','Rotate ⟳'],
+['تسجيل صوت الدكتور من مايك الكمبيوتر مع الفيديو','Record the doctor\'s voice from the computer mic with the video'],['تشبّع الألوان (Saturation)','Saturation'],['تشغيل الكاميرا','Start camera'],
+['تعديل','Edit'],['تعديل بيانات المريض','Edit patient details'],['تفريغ الشاشة من غير مسح السجل','Clear the screen without deleting the record'],['تقرير PDF','PDF report'],
+['تقرير فحص الأذن (Otoscopy)','Otoscopy Report'],['تقرير فحص منظار الأنف والأذن والحنجرة','ENT Endoscopy Report'],['تكبير رقمي (Zoom)','Digital zoom'],
+['تليفون / عنوان العيادة (بيظهر تحت في التقرير – بالإنجليزي)','Clinic phone / address (shown at the bottom of the report)'],['تليفون / عنوان العيادة (بيظهر تحت في التقرير)','Clinic phone / address (shown at the bottom of the report)'],
+['تم','Done'],['توقيع الطبيب','Doctor\'s signature'],['جاري تجهيز التقرير…','Preparing the report…'],['جاري تجهيز النسخة الاحتياطية…','Preparing the backup…'],['حدد الصور الأول','Select photos first'],
+['حذف','Delete'],['حذف المحدد','Delete selected'],['حصلت مشكلة في تجهيز الـ PDF – استخدم «طباعة»','Could not prepare the PDF – use «Print»'],['حفظ التعديل','Save changes'],['حفظ التوقيع','Save signature'],
+['د.','Dr.'],['ذاكرة الجهاز فاضية – مفيش صور أو فيديوهات.','The device memory is empty – no photos or videos.'],
+['رجوع الإضاءة والتباين والألوان والتكبير والتدوير والميرور للوضع الأساسي','Reset brightness, contrast, colour, zoom, rotation and mirror to default'],['رجّع الكاميرا:','Bring the camera back:'],
+['رفع صورة توقيع','Upload signature image'],['رقم الموبايل','Mobile number'],['رقم واتساب (المريض أو الدكتور)','WhatsApp number (patient or doctor)'],['زرار الجهاز:','Device button:'],
+['زرار الجهاز: تشغيل / إيقاف الفيديو','Device button: start / stop video'],['زرار الجهاز: صورة','Device button: photo'],['زرار المنظار بيصوّر، والبرنامج بيفتح لوحده أول ما توصّل المنظار','The scope button takes photos, and the program opens by itself when you plug in the scope'],
+['سجل المرضى','Patients'],['سنة','years'],['شاشة الكشف بالمنظار','Endoscopy Exam Screen'],['شاشة الكشف – منظار الأنف والأذن والحنجرة المرن','Exam Screen – Flexible ENT Endoscope'],
+['شاشة كشف الأذن (Video Otoscope)','Ear Exam Screen (Video Otoscope)'],['شاشة كشف الأذن – Video Otoscope','Ear Exam Screen – Video Otoscope'],['شغّل الجهاز تاني','Turn the device on again'],
+['شغّل الكاميرا الأول','Start the camera first'],['شمال','Left'],['يمين','Right'],['صور وفيديوهات اتصورت على الجهاز نفسه (وهو متوصل كفلاشة)','Photos and videos taken on the device itself (connected as a USB drive)'],
+['صور وفيديوهات الجلسة','Session photos and videos'],['صورة','Photo'],['صورة ·','Photo ·'],['فيديو','Video'],['طباعة','Print'],['طباعة / حفظ PDF','Print / Save PDF'],['عرض','View'],
+['على الموبايل «مشاركة» بتفتح واتساب على طول. على الكمبيوتر حمّل الملف واسحبه جوه محادثة واتساب.','On mobile «Share» opens WhatsApp directly. On a computer, download the file and drag it into the WhatsApp chat.'],
+['على الموبايل: وصّل المنظار والأبلكيشن يفتح لوحده','On mobile: plug in the scope and the app opens by itself'],['فتح','Open'],['فتح واتساب','Open WhatsApp'],['قلب ⇅','Flip ⇅'],
+['كل الصور اللي على الجهاز اتنقلت قبل كده','All photos on the device were already transferred'],['كل الصور اللي على الجهاز اتنقلت قبل كده.','All photos on the device were already transferred.'],
+['لازم الموقع يتفتح على https','The site must be opened over https'],['لسه ما اتعملتش نسخة احتياطية','No backup made yet'],['لسه مفيش توقيع','No signature yet'],['لسه مفيش صور','No photos yet'],
+['لسه مفيش صور – دوس "صورة" أو Space','No photos yet – press "Photo" or Space'],['للأوتوسكوب','for the otoscope'],['للمنظار','for the scope'],['لوجو العيادة','Clinic logo'],
+['لوجو العيادة (بيظهر جنب لوجو ميديكا مول وفي التقرير)','Clinic logo (shown next to the Medica Mall logo and on the report)'],
+['لوجو العيادة (لوجو Colo Cure موجود جاهز – ارفع لوجو تاني بس لو عايز تغيّره)','Clinic logo (Colo Cure logo is built in – upload another only to change it)'],
+['مثال: 01xxxxxxxxx · 15 ش التحرير – الدقي','e.g. 01xxxxxxxxx · 15 Tahrir St – Dokki'],['مثال: د. أحمد محمد – استشاري أنف وأذن وحنجرة','e.g. Dr. Ahmed Mohamed – ENT Consultant'],['مثال: عيادة د. …','e.g. Dr. … Clinic'],
+['مثال: فحص الأنف والأذن والحنجرة – بحة في الصوت','e.g. ENT examination – hoarseness'],['مثال: كشف أذن – ألم / طنين / ضعف سمع / إفرازات','e.g. Ear exam – pain / tinnitus / hearing loss / discharge'],
+['مثال: منظار تشخيصي – سبب الكشف / الشكوى','e.g. Diagnostic endoscopy – reason / complaint'],['مريض بدون اسم','Unnamed patient'],['مريض جديد','New patient'],['مسح','Clear'],['مش لاقي الجهاز كفلاشة','Device not found as a USB drive'],
+['مشاركة','Share'],['مشاركة (واتساب)','Share (WhatsApp)'],['مفيش صور أو فيديوهات في الملفات دي','No photos or videos in these files'],['مفيش صور للتقرير','No photos for the report'],['مفيش مرضى','No patients'],
+['مفيش مرضى لسه','No patients yet'],['مفيش ملفات','No files'],['ملء الشاشة','Full screen'],['ملاحظات الفحص… (بتتحفظ تلقائي وتطلع في التقرير)','Exam notes… (saved automatically and shown on the report)'],
+['من زرار التشغيل (سيب الكابل متوصل بالكمبيوتر).','with the power button (keep the cable connected to the computer).'],['ميديكا مول','Medica Mall'],['ميديكا مول · السوق الطبي الأول في مصر','Medica Mall · Egypt\'s first medical marketplace'],
+['ميرور ⇋','Mirror ⇋'],['نسخ الصورة','Copy image'],['نقل لملف المريض','Move to patient file'],['نوع الجهاز','Device type'],
+['واتساب مش بيسمح لأي موقع يبعت ملفات أوتوماتيك: انسخ الصورة أو حمّل الملفات، وافتح المحادثة، واعمل لصق (Ctrl+V) أو اسحب الملفات جوه المحادثة.','WhatsApp does not let websites send files automatically: copy the image or download the files, open the chat, then paste (Ctrl+V) or drag the files into the chat.'],
+['والكابل متوصل ← هيدخل وضع نقل البيانات (أيقونة الكمبيوتر على شاشته).','with the cable connected → it enters data-transfer mode (computer icon on its screen).'],['وايت بالانس','White balance'],
+['وجّه الجهاز على شاش أو قطن أبيض واضغط – الألوان تتظبط على الأبيض الحقيقي','Point the device at white gauze or cotton and press – colours are calibrated to true white'],['وصّل المنظار واضغط "تشغيل الكاميرا"','Plug in the scope and press "Start camera"'],
+['↺ إعادة ضبط البيانات','↺ Reset data'],['↺ ريست','↺ Reset'],['↺ ضبط افتراضي','↺ Defaults'],['↻ الكاميرات','↻ Cameras'],['⏳ مستني الكاميرا…','⏳ Waiting for the camera…'],['⏳ مستني ذاكرة الجهاز…','⏳ Waiting for the device memory…'],
+['⏹ إيقاف التسجيل','⏹ Stop recording'],['⏹ الفيديو اتحفظ','⏹ Video saved'],['⏺ بدأ التسجيل','⏺ Recording started'],['⏺ بدأ التسجيل بالصوت 🎤','⏺ Recording started with sound 🎤'],['⏺ تسجيل فيديو','⏺ Record video'],
+['⚙ أدوات الصورة والكاميرا','⚙ Image & camera tools'],['⚠ المايك مش شغال – الفيديو هيتسجل من غير صوت','⚠ Mic not working – video will be recorded without sound'],['⚪ وايت بالانس','⚪ White balance'],['⚪ وايت بالانس: شغال','⚪ White balance: on'],
+['✎ تعديل البيانات','✎ Edit details'],['✓ اتحفظت','✓ Saved'],['✔ البيانات اتعملها ريست – سجل المرضى زي ما هو','✔ Data reset – patient records kept'],['✔ البيانات اتنقلت لملف المريض.','✔ Data moved to the patient file.'],
+['✔ التوقيع اتحفظ وهيظهر في التقرير','✔ Signature saved – it will appear on the report'],['✔ الشاشة اتفرّغت – بيانات المريض محفوظة في "سجل المرضى"','✔ Screen cleared – patient data kept in "Patients"'],
+['✔ الصورة اتنسخت – اعمل لصق (Ctrl+V) في واتساب','✔ Image copied – paste (Ctrl+V) in WhatsApp'],['✔ الصورة رجعت للإعدادات الأساسية','✔ Image reset to defaults'],['✔ الكاميرا رجعت – تقدر تكمل الكشف','✔ Camera is back – you can continue'],
+['✔ الملفات اتحملت في Downloads','✔ Files downloaded to Downloads'],['✔ الوايت بالانس اتظبط','✔ White balance set'],['✔ الوايت بالانس اتظبط للأوتوسكوب','✔ White balance set for the otoscope'],['✔ الوايت بالانس اتظبط للمنظار','✔ White balance set for the scope'],
+['✔ بيانات المريض اتعدلت','✔ Patient details updated'],['✔ صورة التوقيع اتحفظت','✔ Signature image saved'],['✔ فيه توقيع محفوظ','✔ A signature is saved'],['⬆ استرجاع نسخة','⬆ Restore backup'],['⬇ نسخة احتياطية','⬇ Backup'],
+['🎤 الصوت هيتسجل مع الفيديو','🎤 Sound will be recorded with the video'],['🎤 الصوت: شغال','🎤 Sound: on'],['🎤 الصوت: مقفول','🎤 Sound: off'],['🎥 فيديو','🎥 Video'],['👂 أوتوسكوب','👂 Otoscope'],['👂 أوتوسكوب (USB)','👂 Otoscope (USB)'],
+['👂 اتحوّل لوضع الأوتوسكوب','👂 Switched to otoscope mode'],['👂 الأوتوسكوب اتوصل ✔','👂 Otoscope connected ✔'],['👂 وضع الأوتوسكوب','👂 Otoscope mode'],['👂 وضع الأوتوسكوب – الأوتوسكوب مش متوصل، وصّله وهيشتغل لوحده','👂 Otoscope mode – otoscope not connected, plug it in and it starts by itself'],
+['📥 استيراد من الجهاز','📥 Import from device'],['📥 صور وفيديوهات على الجهاز','📥 Photos and videos on the device'],['📥 نقل البيانات من الجهاز','📥 Transfer data from the device'],['📷 اتصورت','📷 Captured'],['📷 صورة','📷 Photo'],
+['🔒 بيانات المرضى والصور بتتحفظ على الجهاز ده بس ومش بتترفع على أي سيرفر. اعمل نسخة احتياطية كل أسبوع واحفظها على Drive أو واتساب.','🔒 Patient data and photos are stored on this device only and are never uploaded. Make a weekly backup and keep it on Drive or WhatsApp.'],
+['🔬 اتحوّل لوضع المنظار','🔬 Switched to scope mode'],['🔬 المنظار (USB)','🔬 Scope (USB)'],['🔬 المنظار اتوصل ✔','🔬 Scope connected ✔'],['🔬 منظار','🔬 Scope'],['🔬 وضع المنظار','🔬 Scope mode'],
+['🔬 وضع المنظار – المنظار مش متوصل، وصّله وهيشتغل لوحده','🔬 Scope mode – scope not connected, plug it in and it starts by itself'],['المنظار اتوصل ✔','Scope connected ✔'],
+['ميديكا مول · medicamall.com · 01011568008','Medica Mall · medicamall.com · 01011568008'],['المايك مش متاح','Mic not available'],
+/* new report / WhatsApp dialog */
+['رقم واتساب المريض','Patient WhatsApp number'],['📲 إرسال للمريض على واتساب','📲 Send to patient on WhatsApp'],['مشاركة…','Share…'],
+['التقرير بيتبعت PDF ومعاه رسالة فيها بيانات المريض. على الموبايل بيفتح محادثة المريض على طول؛ على الكمبيوتر بيفتح المحادثة والملف بيكون متنسخ – اضغط Ctrl+V ثم إرسال.','The report is sent as a PDF with a message containing the patient\'s details. On mobile it opens the patient\'s chat directly; on a computer it opens the chat with the file copied – press Ctrl+V then Send.'],
+['اكتب رقم واتساب المريض الأول','Enter the patient\'s WhatsApp number first'],['اتفتح واتساب – اضغط Ctrl+V في المحادثة علشان تلزق ملف التقرير، وبعدين إرسال','WhatsApp opened – press Ctrl+V in the chat to paste the report file, then Send'],
+['اختار واتساب من القايمة – الرسالة والتقرير جاهزين','Choose WhatsApp from the list – the message and report are ready'],['الملف اتحمّل – اسحبه جوه محادثة واتساب اللي اتفتحت','The file was downloaded – drag it into the WhatsApp chat that just opened'],
+['واتساب مش متثبت – اختار تطبيق للمشاركة','WhatsApp is not installed – choose an app to share'],['تعذّر فتح واتساب','Could not open WhatsApp'],['اللغة','Language']
+]);
+/* templated / composed strings */
+const P = [
+  [/^(\d+) ملف محدد(?: \((\d+) صورة\))?$/, (m,a,b) => `${a} files selected` + (b ? ` (${b} photos)` : '')],
+  [/^آخر نسخة احتياطية: (.+)$/, 'Last backup: $1'],
+  [/^استرجاع (\d+) مريض و (\d+) ملف من نسخة (.+)؟$/, 'Restore $1 patients and $2 files from the backup of $3?'],
+  [/^التقرير 6 صور – اتاخد أول 6 صور( من المحدد)?$/, (m,a) => 'The report holds 6 photos – the first 6' + (a ? ' selected' : '') + ' were used'],
+  [/^جاري النقل… (\d+) \/ (\d+)$/, 'Transferring… $1 / $2'],
+  [/^حذف (\d+) ملف نهائيًا من الجهاز؟$/, 'Permanently delete $1 files from this device?'],
+  [/^حذف (.+) وكل ملفاته نهائيًا؟$/, 'Permanently delete $1 and all their files?'],
+  [/^بدأت جلسة (.+)$/, 'Session started: $1'],
+  [/^✓ اتحفظت بيانات (.+)$/, '✓ Saved: $1'],
+  [/^فيديو (\d*)ث( 🎤)?$/, (m,a,b) => `Video ${a}s${b || ''}`],
+  [/^لقيت (\d+) كاميرا:(.*)$/, 'Found $1 cameras:$2'],
+  [/^لقيت (\d+) ملف جديد \((\d+) صورة · (\d+) فيديو\) على (.+?)\. هيتنقلوا لملف: (.+)$/, (m,a,b,c,d,e) => `Found ${a} new files (${b} photos · ${c} videos) on ${d}. They will be moved to: ${e === 'مريض جديد' ? 'New patient' : e}`],
+  [/^✔ اتسترجع (\d+) مريض و (\d+) ملف$/, '✔ Restored $1 patients and $2 files'],
+  [/^✔ اتنقل (\d+) ملف لملف المريض$/, '✔ Moved $1 files to the patient file'],
+  [/^✔ التقرير جاهز: (\d+) صورة · (.+) MB$/, '✔ Report ready: $1 photos · $2 MB'],
+  [/^✔ النسخة الاحتياطية اتحفظت \((\d+) مريض · (\d+) ملف\) – احفظها على Drive أو واتساب$/, '✔ Backup saved ($1 patients · $2 files) – keep it on Drive or WhatsApp'],
+  [/^المايك مش متاح – اتأكد إنه متوصل ومسموح له \[(.*)\]$/, 'Mic not available – make sure it is connected and allowed [$1]'],
+  [/^⚠ ده مش المنظار:(.*)$/, '⚠ This is not the scope:$1'],
+  [/^الأذن (اليمنى|اليسرى)$/, (m,a) => a === 'اليمنى' ? 'Right ear' : 'Left ear'],
+  [/^أذن (يمين|شمال)$/, (m,a) => a === 'يمين' ? 'Right ear' : 'Left ear'],
+  [/^د\. (.+)$/, 'Dr. $1'],
+  [/^(\d+) ملف$/, '$1 files'], [/^(\d+) صورة$/, '$1 photos'], [/^(\d+) فيديو$/, '$1 videos'], [/^(\d+) مريض$/, '$1 patients'], [/^(\d+) سنة$/, '$1 yrs'],
+  [/^تقرير_(.+)$/, 'Report_$1']
+];
+const AR_RE = /[؀-ۿ]/;
+function trKey(k){
+  if (D.has(k)) return D.get(k);
+  for (const [re, r] of P){ const m = k.match(re); if (m) return typeof r === 'function' ? r(...m) : k.replace(re, r); }
+  return null;
+}
+function tr(s){
+  if (!s || !AR_RE.test(s)) return null;
+  const k = s.replace(/\s+/g, ' ').trim();
+  let t = trKey(k);
+  if (t == null){
+    for (const sep of [' · ', ' | ', ' – ']){
+      if (!k.includes(sep)) continue;
+      let hit = false;
+      const parts = k.split(sep).map(p => { const x = trKey(p.trim()); if (x != null){ hit = true; return x; } return p; });
+      if (hit){ t = parts.join(sep); break; }
+    }
+  }
+  if (t == null) return null;
+  const lead = s.match(/^\s*/)[0], trail = s.match(/\s*$/)[0];
+  return lead + t + trail;
+}
+const T = s => isEn() ? (tr(s) ?? s) : s;           // translate a message for the current language
+const trMsg = s => { if (!isEn() || typeof s !== 'string') return s; const w = tr(s); if (w != null) return w; return s.split('\n').map(l => tr(l) ?? l).join('\n'); };
+window.bxT = T;
+
+/* ---------- live DOM translation ---------- */
+const ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];
+const done = new Set();   // nodes/elements we changed
+const SKIP = {SCRIPT: 1, STYLE: 1, TEXTAREA: 1, NOSCRIPT: 1};
+function doText(n){
+  if (n.__bxSet !== undefined && n.nodeValue === n.__bxSet) return;
+  const p = n.parentNode; if (!p || SKIP[p.nodeName]) return;
+  const t = tr(n.nodeValue);
+  if (t != null && p.nodeName === 'OPTION' && !p.hasAttribute('value')) p.setAttribute('value', p.textContent.trim()); // keep stored values Arabic
+  if (t == null){ if (n.__bxSet !== undefined){ delete n.__bxSet; delete n.__bxOrig; done.delete(n); } return; }
+  n.__bxOrig = n.nodeValue; n.__bxSet = t; n.nodeValue = t; done.add(n);
+}
+function doAttr(el, a){
+  const v = el.getAttribute(a); if (v == null) return;
+  const st = el.__bxA || (el.__bxA = {});
+  if (st[a] && st[a].s === v) return;
+  const t = tr(v); if (t == null){ delete st[a]; return; }
+  st[a] = {o: v, s: t}; el.setAttribute(a, t); done.add(el);
+}
+function walk(root){
+  if (root.nodeType === 3){ doText(root); return; }
+  if (root.nodeType !== 1 || SKIP[root.nodeName]) return;
+  for (const a of ATTRS) if (root.hasAttribute(a)) doAttr(root, a);
+  const tw = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  let n; while ((n = tw.nextNode())){
+    if (n.nodeType === 3) doText(n);
+    else for (const a of ATTRS) if (n.hasAttribute(a)) doAttr(n, a);
+  }
+}
+function restore(){
+  for (const n of done){
+    if (n.nodeType === 3){ if (n.nodeValue === n.__bxSet) n.nodeValue = n.__bxOrig; delete n.__bxSet; delete n.__bxOrig; }
+    else if (n.__bxA){ for (const a in n.__bxA){ if (n.getAttribute(a) === n.__bxA[a].s) n.setAttribute(a, n.__bxA[a].o); } delete n.__bxA; }
+  }
+  done.clear();
+}
+const mo = new MutationObserver(list => {
+  if (!isEn()) return;
+  for (const m of list){
+    if (m.type === 'characterData') doText(m.target);
+    else if (m.type === 'attributes') doAttr(m.target, m.attributeName);
+    else m.addedNodes.forEach(walk);
+  }
+});
+mo.observe(document.documentElement, {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ATTRS});
+
+/* dates & numbers follow the language */
+const fixLoc = l => (isEn() && (l == null || /^ar/i.test(String(l)))) ? 'en-GB' : l;
+for (const f of ['toLocaleString', 'toLocaleDateString', 'toLocaleTimeString']){
+  const o = Date.prototype[f]; Date.prototype[f] = function(l, opt){ return o.call(this, fixLoc(l), opt); };
+}
+{ const o = Number.prototype.toLocaleString; Number.prototype.toLocaleString = function(l, opt){ return o.call(this, fixLoc(l), opt); }; }
+for (const f of ['confirm', 'alert', 'prompt']){ const o = window[f]; if (o) window[f] = function(msg, ...r){ return o.call(window, trMsg(msg), ...r); }; }
+
+/* ---------- language button ---------- */
+const btn = document.createElement('button');
+btn.className = 'ghost'; btn.id = 'btnLang'; btn.title = 'اللغة'; btn.style.fontWeight = '800';
+const chips = document.querySelector('header .chips');
+if (chips){ const ref = document.getElementById('btnSettings'); chips.insertBefore(btn, ref && ref.parentNode === chips ? ref : null); }
+function applyLang(first){
+  const html = document.documentElement;
+  html.lang = LANG; html.dir = isEn() ? 'ltr' : 'rtl';
+  btn.textContent = isEn() ? 'عربي' : 'EN';
+  if (isEn()) walk(document.documentElement); else restore();
+  if (!first){ try { refreshDates(); } catch {} }
+}
+function refreshDates(){ // re-render lists that contain dates / composed text
+  if (typeof renderPatient === 'function') renderPatient();
+  if (typeof renderGallery === 'function') renderGallery();
+}
+btn.onclick = () => { LANG = isEn() ? 'ar' : 'en'; try { localStorage.setItem(LKEY, LANG); } catch {} applyLang(); };
+
+/* ---------- PDF report (canvas pages → PDF, no libraries) ---------- */
+const loadI = src => new Promise(res => { if (!src) return res(null); const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+function pdfPack(jpgs, pw, ph){
+  const enc = new TextEncoder(), parts = [], offs = []; let len = 0;
+  const add = x => { const u = typeof x === 'string' ? enc.encode(x) : x; parts.push(u); len += u.length; };
+  const obj = (n, body) => { offs[n] = len; add(`${n} 0 obj\n`); body(); add('\nendobj\n'); };
+  const A4W = 595.28, A4H = 841.89, n = jpgs.length;
+  add('%PDF-1.4\n'); add(new Uint8Array([37, 226, 227, 207, 211, 10]));
+  obj(1, () => add('<< /Type /Catalog /Pages 2 0 R >>'));
+  obj(2, () => add(`<< /Type /Pages /Count ${n} /Kids [${jpgs.map((_, i) => `${3 + 3 * i} 0 R`).join(' ')}] >>`));
+  jpgs.forEach((j, i) => {
+    const p = 3 + 3 * i, cs = `q ${A4W} 0 0 ${A4H} 0 0 cm /Im0 Do Q`;
+    obj(p, () => add(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4W} ${A4H}] /Resources << /XObject << /Im0 ${p + 1} 0 R >> >> /Contents ${p + 2} 0 R >>`));
+    obj(p + 1, () => { add(`<< /Type /XObject /Subtype /Image /Width ${pw} /Height ${ph} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${j.length} >>\nstream\n`); add(j); add('\nendstream'); });
+    obj(p + 2, () => add(`<< /Length ${cs.length} >>\nstream\n${cs}\nendstream`));
+  });
+  const xref = len, total = 3 + 3 * n;
+  let x = `xref\n0 ${total}\n0000000000 65535 f \n`;
+  for (let k = 1; k < total; k++) x += String(offs[k]).padStart(10, '0') + ' 00000 n \n';
+  add(x); add(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(parts, {type: 'application/pdf'});
+}
+const L = (ar, en) => isEn() ? en : ar;
+const sexL = s => isEn() ? (({'ذكر': 'Male', 'أنثى': 'Female'})[s] || s || '') : (s || '');
+const docL = () => { const n = String(S.doctor || '').replace(/^\s*(د\.?|دكتور|dr\.?|doctor)\s*/i, ''); return n ? L('د. ', 'Dr. ') + n : ''; };
+const earL = e => L({R: 'الأذن اليمنى', L: 'الأذن اليسرى'}[e], {R: 'Right ear', L: 'Left ear'}[e]);
+function reportInfo(items){
+  const isOto = items.some(m => m.mode === 'oto' || m.ear);
+  const title = IS_CLINIC ? L(isOto ? 'تقرير فحص الأذن' : 'تقرير فحص بالمنظار', isOto ? MODES.oto.report : MODES.scope.report)
+                          : L(isOto ? 'تقرير فحص الأذن (Otoscopy)' : 'تقرير فحص منظار الأنف والأذن والحنجرة', isOto ? 'Otoscopy Report' : 'ENT Endoscopy Report');
+  const ears = [...new Set(items.map(m => m.ear).filter(Boolean))].map(earL).join(' + ');
+  const loc = L('ar-EG', 'en-GB');
+  const date = new Date(current.createdAt || Date.now()).toLocaleString(loc, {dateStyle: 'medium', timeStyle: 'short'});
+  const ageSex = [current.age ? current.age + ' ' + L('سنة', 'years') : '', sexL(current.sex)].filter(Boolean).join(' / ');
+  return {isOto, title, ears, date, ageSex, loc};
+}
+let lastPages = [];
+async function buildPdf(items){
+  const EN = isEn(), W = 1240, H = 1754, M = 70, FONT = '"Segoe UI", Tahoma, Arial, sans-serif';
+  const I = reportInfo(items), pages = []; let ctx, y;
+  const X = x => EN ? W - x : x, AL = a => EN ? ({right: 'left', left: 'right'}[a] || a) : a, BX = (x, w) => EN ? W - x - w : x;
+  const newPage = () => { const cv = document.createElement('canvas'); cv.width = W; cv.height = H; ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.direction = EN ? 'ltr' : 'rtl'; pages.push(cv); y = M; };
+  const text = (t, x, yy, size, color = '#10243a', weight = '400', align = 'right') => { ctx.font = `${weight} ${size}px ${FONT}`; ctx.fillStyle = color; ctx.textAlign = AL(align); ctx.fillText(String(t), X(x), yy); };
+  const rect = (x, yy, w, h) => ctx.fillRect(BX(x, w), yy, w, h);
+  const wrap = (t, maxW, size) => { ctx.font = `400 ${size}px ${FONT}`; const out = []; let line = ''; for (const w of String(t || '').split(/\s+/)){ const test = line ? line + ' ' + w : w; if (ctx.measureText(test).width > maxW && line){ out.push(line); line = w; } else line = test; } out.push(line); return out; };
+  const fit = (img, x, yy, mw, mh) => { if (!img) return 0; const r = Math.min(mw / img.width, mh / img.height), w = img.width * r, h = img.height * r; ctx.drawImage(img, BX(x, w), yy + (mh - h) / 2, w, h); return w; };
+
+  const logoSrcs = IS_CLINIC ? [[S.logo || BUILTIN_LOGO_REPORT, 240, 130], [document.getElementById('mmLogo')?.src, 115, 115]]
+                             : [[typeof DEFAULT_LOGO !== 'undefined' ? DEFAULT_LOGO : null, 110, 110], [S.logo, 220, 110]];
+  const logos = await Promise.all(logoSrcs.map(l => loadI(l[0])));
+  const besLogo = !IS_CLINIC && typeof BES_LOGO !== 'undefined' ? await loadI(BES_LOGO) : null;
+  const sign = S.sign ? await loadI(S.sign) : null;
+
+  newPage();
+  text(I.title, W - M, y + 48, 40, '#0a3f7d', '700');
+  if (S.clinic) text(S.clinic, W - M, y + 98, 28);
+  let lx = M; logos.forEach((img, i) => { if (img) lx += fit(img, lx, y, logoSrcs[i][1], logoSrcs[i][2]) + 16; });
+  y += IS_CLINIC ? 140 : 130; ctx.fillStyle = '#0d6fcc'; rect(M, y, W - 2 * M, 5); y += 30;
+
+  const device = !IS_CLINIC ? (I.isOto ? MODES.oto.device : MODES.scope.device) : '';
+  const rows = [[L('اسم المريض', 'Patient Name'), current.name], [L('السن / النوع', 'Age / Sex'), I.ageSex], [L('الموبايل', 'Mobile'), current.phone || ''], [L('التاريخ', 'Date'), I.date],
+    ...(I.ears ? [[L('الأذن', 'Ear examined'), I.ears]] : []), [L('الفحص / ملاحظات', 'Examination / Notes'), current.notes || ''], ...(device ? [['#dev', device]] : [])];
+  const labW = 300, valW = W - 2 * M - labW;
+  for (const [k, v] of rows){
+    const isDev = k === '#dev', lines = isDev ? [v] : wrap(v, valW - 40, 26), rh = Math.max(58, 22 + lines.length * 36);
+    ctx.fillStyle = '#eef4fb'; rect(W - M - labW, y, labW, rh);
+    ctx.strokeStyle = '#d3e3f3'; ctx.lineWidth = 2; ctx.strokeRect(M, y, W - 2 * M, rh);
+    ctx.beginPath(); ctx.moveTo(X(W - M - labW), y); ctx.lineTo(X(W - M - labW), y + rh); ctx.stroke();
+    text(isDev ? L('الجهاز', 'Device') : k, W - M - 20, y + 39, 26, '#10243a', '700');
+    if (isDev){
+      const x0 = EN ? M + labW + 20 : M + 20; let bw = 0;
+      if (besLogo){ const r = Math.min(180 / besLogo.width, 28 / besLogo.height); bw = besLogo.width * r; ctx.drawImage(besLogo, x0, y + 15, bw, besLogo.height * r); }
+      ctx.direction = 'ltr'; ctx.font = `400 24px ${FONT}`; ctx.fillStyle = '#10243a'; ctx.textAlign = 'left'; ctx.fillText(v, x0 + bw + 16, y + 39); ctx.direction = EN ? 'ltr' : 'rtl';
+    } else lines.forEach((ln, i) => text(ln, W - M - labW - 20, y + 39 + i * 36, 26));
+    y += rh;
+  }
+  y += 30;
+
+  const cols = IS_CLINIC ? 3 : 2, GAP = 24, colW = (W - 2 * M - GAP * (cols - 1)) / cols, capSize = cols === 3 ? 19 : 22;
+  const SIG_H = 250, FOOT = 70, rowsN = Math.ceil(items.length / cols);
+  const fitH = rowsN <= 2 ? Math.floor((H - M - FOOT - SIG_H - y - rowsN * 72) / rowsN) : 440;
+  const maxH = Math.max(cols === 3 ? 220 : 300, Math.min(440, fitH));
+  let col = 0, rowH = 0;
+  for (let i = 0; i < items.length; i++){
+    const url = URL.createObjectURL(items[i].blob), img = await loadI(url); URL.revokeObjectURL(url);
+    if (!img) continue;
+    const h = Math.min(colW * img.height / img.width, maxH), cellH = h + 50;
+    if (col === 0 && y + cellH > H - M) newPage();
+    const xa = W - M - colW - col * (colW + GAP), x = BX(xa, colW), r = Math.min(colW / img.width, h / img.height), iw = img.width * r, ih = img.height * r;
+    ctx.fillStyle = '#000'; ctx.fillRect(x, y, colW, h); ctx.drawImage(img, x + (colW - iw) / 2, y + (h - ih) / 2, iw, ih);
+    ctx.strokeStyle = '#d3e3f3'; ctx.lineWidth = 2; ctx.strokeRect(x, y, colW, h + 44);
+    const cap = `${L('صورة', 'Image')} ${i + 1}${items[i].ear ? ' · ' + earL(items[i].ear) : ''} · ${new Date(items[i].createdAt).toLocaleTimeString(I.loc, {hour: '2-digit', minute: '2-digit'})}`;
+    ctx.font = `400 ${capSize}px ${FONT}`; ctx.fillStyle = '#4a6480'; ctx.textAlign = EN ? 'left' : 'right'; ctx.fillText(cap, EN ? x + 14 : x + colW - 14, y + h + 32);
+    rowH = Math.max(rowH, cellH);
+    if (col === cols - 1 || i === items.length - 1){ y += rowH + 20; rowH = 0; col = 0; } else col++;
+  }
+
+  const sigTop = H - M - FOOT - SIG_H;
+  if (y > sigTop) newPage();
+  y = sigTop;
+  ctx.strokeStyle = '#d3e3f3'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(M, y); ctx.lineTo(W - M, y); ctx.stroke();
+  const bw = 460, cx = M + bw / 2;
+  text(L('الطبيب المعالج', 'Physician'), cx, y + 44, 26, '#0a3f7d', '700', 'center');
+  if (sign){ const r = Math.min(360 / sign.width, 110 / sign.height), sw = sign.width * r, sh = sign.height * r; ctx.drawImage(sign, X(cx) - sw / 2, y + 58 + (110 - sh) / 2, sw, sh); }
+  const ly = y + 180; ctx.strokeStyle = '#9fb3c8'; ctx.beginPath(); ctx.moveTo(X(M), ly); ctx.lineTo(X(M + bw), ly); ctx.stroke();
+  wrap(docL(), bw - 10, 24).slice(0, 2).forEach((ln, i) => text(ln, cx, ly + 34 + i * 32, 24, '#10243a', '700', 'center'));
+
+  pages.forEach((p, i) => { const c = p.getContext('2d'); c.direction = EN ? 'ltr' : 'rtl'; c.font = `400 20px ${FONT}`; c.fillStyle = '#8aa0b8'; c.textAlign = 'center';
+    c.fillText(`Medica Mall · medicamall.com — ${L(`صفحة ${i + 1} من ${pages.length}`, `Page ${i + 1} of ${pages.length}`)}`, W / 2, H - 30);
+    if (S.clinicInfo){ c.font = `400 22px ${FONT}`; c.fillStyle = '#4a6480'; c.fillText(String(S.clinicInfo), W / 2, H - 58); } });
+
+  const jpgs = []; lastPages = [];
+  for (const p of pages){ const b = await new Promise(r => p.toBlob(r, 'image/jpeg', 0.88)); jpgs.push(new Uint8Array(await b.arrayBuffer())); lastPages.push(p.toDataURL('image/jpeg', 0.88)); }
+  return {blob: pdfPack(jpgs, W, H), info: I};
+}
+window.bxBuildPdf = buildPdf;
+
+/* ---------- report dialog ---------- */
+let dlg = document.getElementById('dlgReport');
+if (!dlg){ dlg = document.createElement('dialog'); dlg.id = 'dlgReport'; document.body.appendChild(dlg); }
+dlg.innerHTML = `<div class="dlg-h"><h3>تقرير PDF</h3><button data-x>×</button></div>
+  <div class="dlg-b">
+    <p class="hint" id="rpInfo" style="margin-top:0">جاري تجهيز التقرير…</p>
+    <label>رقم واتساب المريض</label><input id="rpPhone" type="tel" dir="ltr" placeholder="01xxxxxxxxx">
+    <div class="actions">
+      <button class="yellow" id="rpWa">📲 إرسال للمريض على واتساب</button>
+      <button id="rpDownload">تحميل PDF</button>
+      <button class="ghost" id="rpShare">مشاركة…</button>
+      <button class="ghost" id="rpPrint">طباعة</button>
+    </div>
+    <p class="hint">التقرير بيتبعت PDF ومعاه رسالة فيها بيانات المريض. على الموبايل بيفتح محادثة المريض على طول؛ على الكمبيوتر بيفتح المحادثة والملف بيكون متنسخ – اضغط Ctrl+V ثم إرسال.</p>
+  </div>`;
+dlg.querySelector('[data-x]').onclick = () => dlg.close();
+if (isEn()) walk(dlg);
+const $$ = id => document.getElementById(id);
+let reportFile = null, reportInfoCur = null;
+const BTNS = ['rpWa', 'rpDownload', 'rpShare', 'rpPrint'];
+$$('btnReport').onclick = async () => {
+  if (!current){ toast(T('ابدأ جلسة لمريض علشان الصور تتحفظ في ملفه')); return; }
+  let items = (await getSelectedOrAll()).filter(m => m.type === 'photo');
+  if (!items.length){ toast(T('مفيش صور للتقرير')); return; }
+  if (IS_CLINIC && items.length > 6){ toast(T(`التقرير 6 صور – اتاخد أول 6 صور${selected.size ? ' من المحدد' : ''}`)); items = items.slice(0, 6); }
+  reportFile = null; $$('rpInfo').textContent = 'جاري تجهيز التقرير…'; BTNS.forEach(id => $$(id).disabled = true);
+  $$('rpPhone').value = current.phone || '';
+  $$('rpShare').hidden = !navigator.share;
+  dlg.showModal();
+  try {
+    const {blob, info} = await buildPdf(items), d = new Date(current.createdAt || Date.now());
+    const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    reportFile = new File([blob], `${L('تقرير', 'Report')}_${safe(current.name)}_${ds}.pdf`, {type: 'application/pdf'}); reportInfoCur = info;
+    $$('rpInfo').textContent = `✔ التقرير جاهز: ${items.length} صورة · ${(blob.size / 1048576).toFixed(1)} MB`;
+    BTNS.forEach(id => $$(id).disabled = false);
+  } catch (e){ console.warn('pdf', e); $$('rpInfo').textContent = 'حصلت مشكلة في تجهيز الـ PDF – استخدم «طباعة»'; $$('rpPrint').disabled = !lastPages.length; }
+};
+$$('rpDownload').onclick = () => { if (reportFile) download(reportFile, reportFile.name); };
+$$('rpShare').onclick = async () => {
+  if (!reportFile) return;
+  try { await navigator.share({files: [reportFile], title: waText(), text: waText()}); }
+  catch (e){ if (e.name !== 'AbortError'){ download(reportFile, reportFile.name); toast(T('المشاركة مش متاحة هنا – الملف اتحمّل، ابعته من واتساب')); } }
+};
+$$('rpPrint').onclick = () => {
+  if (!lastPages.length) return;
+  const w = window.open('', '_blank'); if (!w){ toast(T('اسمح بالنوافذ المنبثقة')); return; }
+  const ttl = (reportInfoCur ? reportInfoCur.title : 'Report') + ' – ' + String(current?.name || '').replace(/[<&]/g, '');
+  w.document.write(`<!doctype html><html lang="${LANG}"><head><meta charset="utf-8"><title>${ttl}</title><style>@page{size:A4;margin:0}html,body{margin:0;padding:0}img{width:100%;display:block;break-after:page;page-break-after:always}img:last-child{break-after:auto;page-break-after:auto}@media screen{body{background:#555}img{max-width:820px;margin:12px auto;box-shadow:0 4px 18px rgba(0,0,0,.4)}}</style></head><body>${lastPages.map(s => `<img src="${s}">`).join('')}</body></html>`);
+  w.document.close(); setTimeout(() => { try { w.print(); } catch {} }, 700);
+};
+
+/* ---------- WhatsApp: PDF + patient details, straight to the patient's chat ---------- */
+function waText(){
+  const I = reportInfoCur || reportInfo([]);
+  const lines = [`*${I.title}*`, `${L('الاسم', 'Name')}: ${current.name || ''}`];
+  if (I.ageSex) lines.push(`${L('السن / النوع', 'Age / Sex')}: ${I.ageSex}`);
+  lines.push(`${L('التاريخ', 'Date')}: ${I.date}`);
+  if (I.ears) lines.push(`${L('الأذن', 'Ear')}: ${I.ears}`);
+  if (current.notes) lines.push(`${L('الفحص / ملاحظات', 'Examination / Notes')}: ${current.notes}`);
+  const sig = [docL(), S.clinic].filter(Boolean).join(' – ');
+  if (sig) lines.push('', sig);
+  if (S.clinicInfo) lines.push(S.clinicInfo);
+  return lines.join('\n');
+}
+const b64 = blob => new Promise((res, rej) => { const fr = new FileReader(); fr.onload = () => { const s = String(fr.result); res(s.slice(s.indexOf(',') + 1)); }; fr.onerror = rej; fr.readAsDataURL(blob); });
+const u8b64 = s => { const b = new TextEncoder().encode(s); let x = ''; for (let i = 0; i < b.length; i += 0x8000) x += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(x); };
+async function waSend(file, phone, text){
+  const N = window.BesNative, WV = window.chrome && window.chrome.webview;
+  if (N && typeof N.shareWhatsApp === 'function'){                 // Android app (new): opens the patient's chat with PDF + message
+    const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    N.fileBegin(id, file.name, 'application/pdf');
+    const CH = 512 * 1024; for (let o = 0; o < file.size; o += CH) N.fileChunk(id, await b64(file.slice(o, o + CH)));
+    N.fileEnd(id);
+    N.shareWhatsApp(id, phone, text);
+    return;
+  }
+  if (WV && window.__besWa){                                        // Windows app (new): file copied to clipboard + chat opened
+    WV.postMessage('wa:' + [phone, u8b64(text), u8b64(file.name), await b64(file)].join('\n'));
+    toast(T('اتفتح واتساب – اضغط Ctrl+V في المحادثة علشان تلزق ملف التقرير، وبعدين إرسال'));
+    return;
+  }
+  const mobile = !!N || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  if (mobile && navigator.share && (!navigator.canShare || navigator.canShare({files: [file]}))){   // older app / mobile browser: share sheet
+    try { await navigator.share({files: [file], title: text, text}); toast(T('اختار واتساب من القايمة – الرسالة والتقرير جاهزين')); return; }
+    catch (e){ if (e.name === 'AbortError') return; console.warn('share', e); }
+  }
+  download(file, file.name);                                       // computer browser / older Windows app
+  try { await navigator.clipboard.writeText(text); } catch {}
+  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(text)}`, '_blank');
+  toast(T('الملف اتحمّل – اسحبه جوه محادثة واتساب اللي اتفتحت'));
+}
+$$('rpWa').onclick = async () => {
+  if (!reportFile) return;
+  const phone = waNumber($$('rpPhone').value);
+  if (!phone){ toast(T('اكتب رقم واتساب المريض الأول')); $$('rpPhone').focus(); return; }
+  if (current && !current.phone && typeof put === 'function'){ current.phone = $$('rpPhone').value.trim(); current.updatedAt = Date.now(); try { await put('patients', current); renderPatient(); } catch {} }
+  try { await waSend(reportFile, phone, waText()); } catch (e){ console.warn('wa', e); toast(T('تعذّر فتح واتساب')); }
+};
+
+applyLang(true);
+})();
+
 })();
 </script>
 <div id="appBar" style="display:none;position:fixed;left:10px;right:10px;bottom:10px;z-index:9999;background:#0a3f7d;color:#fff;border-radius:14px;padding:10px 12px;box-shadow:0 8px 24px rgba(10,63,125,.35);align-items:center;gap:10px;font-size:14px;line-height:1.5">

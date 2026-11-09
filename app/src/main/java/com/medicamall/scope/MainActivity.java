@@ -2,6 +2,7 @@ package com.medicamall.scope;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.content.ContentValues;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -581,6 +582,38 @@ public class MainActivity extends Activity {
             send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             Intent chooser = Intent.createChooser(send, "مشاركة");
             ui.post(() -> startActivity(chooser));
+        }
+
+        /** Report → WhatsApp: opens the patient's chat directly with the PDF and a message (falls back to the share sheet). */
+        @JavascriptInterface
+        public void shareWhatsApp(String id, String phone, String text) {
+            File f;
+            synchronized (outFiles) { f = outFiles.get(id); }
+            if (f == null) return;
+            final Uri uri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".files", f);
+            final String num = phone == null ? "" : phone.replaceAll("\\D", "");
+            final String msg = text == null ? "" : text;
+            ui.post(() -> {
+                for (String pkg : new String[]{"com.whatsapp", "com.whatsapp.w4b"}) {
+                    try {
+                        Intent i = new Intent(Intent.ACTION_SEND);
+                        i.setType("application/pdf");
+                        i.setPackage(pkg);
+                        i.putExtra(Intent.EXTRA_STREAM, uri);
+                        if (!msg.isEmpty()) i.putExtra(Intent.EXTRA_TEXT, msg);
+                        if (!num.isEmpty()) i.putExtra("jid", num + "@s.whatsapp.net");
+                        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        startActivity(i);
+                        return;
+                    } catch (ActivityNotFoundException ignored) { }
+                }
+                Intent s = new Intent(Intent.ACTION_SEND);
+                s.setType("application/pdf");
+                s.putExtra(Intent.EXTRA_STREAM, uri);
+                if (!msg.isEmpty()) s.putExtra(Intent.EXTRA_TEXT, msg);
+                s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try { startActivity(Intent.createChooser(s, "مشاركة التقرير")); } catch (Exception ignored) { }
+            });
         }
 
         @JavascriptInterface
