@@ -152,7 +152,7 @@ namespace MedicaMallScope
         static readonly ImageCodecInfo JpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.MimeType == "image/jpeg");
 
         public string DevicePath;
-        public bool Running, HasButton, IsOto, IsGrab;
+        public bool Running, HasButton, IsOto, IsGrab, IsHdmiDev;
         public int W = 1280, H = 720;
         public event Action Button;
 
@@ -165,6 +165,16 @@ namespace MedicaMallScope
                    n.Contains("usbtv") || n.Contains("usb 2861") || p.Contains("vid_1c88");
         }
 
+        // HDMI -> USB capture cards (MacroSilicon MS2109/2130 "USB Video", Cam Link, ...): plain UVC cameras, no analog setup.
+        // (a laptop's own HDMI port is output only – the camera's HDMI goes through one of these cards)
+        public static bool IsHdmi(DsDevice d)
+        {
+            string n = ((d == null ? null : d.Name) ?? "").ToLowerInvariant();
+            string p = ((d == null ? null : d.DevicePath) ?? "").ToLowerInvariant();
+            return n.Contains("hdmi") || n.Contains("macrosilicon") || n.Contains("cam link") || n.Contains("usb video") || n.Contains("usb3 video") ||
+                   n.Contains("capture") || p.Contains("vid_534d") || p.Contains("vid_345f") || p.Contains("vid_0fd9");
+        }
+
         public static bool IsOtoscope(DsDevice d)
         {
             string p = ((d == null ? null : d.DevicePath) ?? "").ToLowerInvariant();
@@ -174,19 +184,21 @@ namespace MedicaMallScope
         // the scope (Besdata) first; otherwise the Video Otoscope (USB 1224:2825)
         public static DsDevice Find()
         {
-            DsDevice scope = null, oto = null, grab = null;
+            DsDevice scope = null, oto = null, grab = null, hdmi = null;
             foreach (var d in DsDevice.GetDevicesOfCat(FilterCategory.VideoInputDevice))
             {
                 string n = (d.Name ?? "").ToLowerInvariant();
                 if (scope == null && (n.Contains("besdata") || n.Contains("endoscope"))) scope = d;
                 else if (grab == null && IsCapture(d)) grab = d;
+                else if (hdmi == null && IsHdmi(d)) hdmi = d;
                 // the otoscope has no still-image pin and no HID (Button Spy, 2026-10-10): its button can't reach the PC,
                 // so it stays a normal Windows camera (WebView2) – the app does not hold it natively
                 else if (oto == null && false && IsOtoscope(d)) oto = d;
                 else d.Dispose();
             }
-            if (scope != null) { if (oto != null) oto.Dispose(); if (grab != null) grab.Dispose(); return scope; }
-            if (grab != null) { if (oto != null) oto.Dispose(); return grab; }
+            if (scope != null) { if (oto != null) oto.Dispose(); if (grab != null) grab.Dispose(); if (hdmi != null) hdmi.Dispose(); return scope; }
+            if (grab != null) { if (oto != null) oto.Dispose(); if (hdmi != null) hdmi.Dispose(); return grab; }
+            if (hdmi != null) { if (oto != null) oto.Dispose(); return hdmi; }
             return oto;
         }
 
@@ -207,7 +219,8 @@ namespace MedicaMallScope
                 if (grabDev) SetupAnalog(builder, cap);
 
                 IPin capPin = DsFindPin.ByCategory(cap, PinCategory.Capture, 0);
-                if (capPin != null) PickBestFormat(capPin, grabDev ? (AnalogSettings.Pal ? 576 : 480) : 1920);
+                bool hdmiDev = !grabDev && IsHdmi(dev);
+                if (capPin != null) PickBestFormat(capPin, grabDev ? (AnalogSettings.Pal ? 576 : 480) : hdmiDev ? 1080 : 1920);
 
                 // live video -> RGB24 grabber
                 capGrab = (ISampleGrabber)new SampleGrabber();
@@ -265,7 +278,8 @@ namespace MedicaMallScope
                 }
                 DevicePath = dev.DevicePath;
                 IsOto = IsOtoscope(dev);
-                IsGrab = grabDev;
+                IsGrab = grabDev || hdmiDev;
+                IsHdmiDev = hdmiDev;
                 Running = true;
                 Paths.Log("scope started: " + dev.Name + " " + W + "x" + H + " button=" + HasButton);
                 return true;
@@ -798,9 +812,9 @@ namespace MedicaMallScope
         {
             bool ok = cam.Running && cam.IsGrab;
             driverBar.BackColor = ok ? Color.FromArgb(220, 245, 226) : Color.FromArgb(255, 244, 214);
-            driverLbl.Text = ok ? "✓ كارت الكاميرا شغال" + (cam.W > 0 ? " (" + cam.W + "×" + cam.H + ")" : "")
+            driverLbl.Text = ok ? (cam.IsHdmiDev ? "✓ كارت HDMI شغال" : "✓ كارت الكاميرا شغال") + (cam.W > 0 ? " (" + cam.W + "×" + cam.H + ")" : "")
                                : cam.Running ? "المنظار شغال. لكارت الكاميرا: سطّب التعريف لو أول مرة، ووصّل الكارت."
-                               : "كارت الكاميرا مش ظاهر: دوس «تسطيب تعريف كارت الكاميرا» لو أول مرة، وبعدين شيل الكارت ورجّعه في الـ USB.";
+                               : "كارت الكاميرا مش ظاهر: دوس «تسطيب تعريف كارت الكاميرا» لو أول مرة، وبعدين شيل الكارت ورجّعه في الـ USB. (كارت HDMI مش محتاج تعريف)";
         }
 
         void RestartCam()
