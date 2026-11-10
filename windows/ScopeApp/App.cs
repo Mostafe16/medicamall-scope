@@ -531,6 +531,34 @@ namespace MedicaMallScope
             catch (Exception ex) { Paths.Log("dongle pnp: " + ex.Message); return false; }
         }
 
+        // diagnostics: every camera Windows offers + capture-like USB devices (with their driver state) go to log.txt
+        public static void LogDevices()
+        {
+            try
+            {
+                foreach (var d in DsDevice.GetDevicesOfCat(FilterCategory.VideoInputDevice))
+                {
+                    Paths.Log("video device: " + d.Name + " | " + d.DevicePath + (ScopeCamera.IsCapture(d) ? "  <- capture dongle" : ""));
+                    d.Dispose();
+                }
+            }
+            catch (Exception ex) { Paths.Log("video devices: " + ex.Message); }
+            try
+            {
+                using (var q = new ManagementObjectSearcher("SELECT Name, DeviceID, PNPClass, ConfigManagerErrorCode FROM Win32_PnPEntity WHERE DeviceID LIKE 'USB%' OR ConfigManagerErrorCode <> 0"))
+                    foreach (ManagementObject m in q.Get())
+                    {
+                        string id = (m["DeviceID"] ?? "").ToString();
+                        object e = m["ConfigManagerErrorCode"];
+                        bool problem = e != null && Convert.ToInt32(e) != 0;
+                        string cls = (m["PNPClass"] ?? "").ToString();
+                        if (problem || cls == "Camera" || cls == "Image" || cls == "MEDIA" || id.ToUpperInvariant().Contains("VID_1C88") || id.ToUpperInvariant().Contains("VID_EB1A"))
+                            Paths.Log("usb: " + m["Name"] + " | " + cls + " | " + id + " | err=" + e);
+                    }
+            }
+            catch (Exception ex) { Paths.Log("usb devices: " + ex.Message); }
+        }
+
         public static void Install(IWin32Window owner)
         {
             if (!File.Exists(Setup)) { MessageBox.Show(owner, "ملف التعريف مش موجود جنب البرنامج.", "Medica Mall", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
@@ -761,6 +789,7 @@ namespace MedicaMallScope
         {
             if (driverAsked) return;
             driverAsked = true;
+            Task.Run(() => GrabberDriver.LogDevices());
             var _ = Task.Run(() => GrabberDriver.PluggedWithoutDriver()).ContinueWith(t =>
             {
                 if (!t.Result) return;
