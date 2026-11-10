@@ -1,0 +1,64 @@
+name: Build Windows (capture dongle test)
+
+# Separate test build: Medica Mall Scope + the analog "USB Video Capture" dongle (SMI Grabber) and its driver.
+# Publishes to the capture-test release only; the normal Windows app (win-app) is not touched.
+on:
+  push:
+    branches: [test/capture-dongle]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: capture-build
+  cancel-in-progress: true
+
+jobs:
+  app:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bundle exam screen + icon
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pip install --quiet pillow
+          gh release download app -p MedicaMall-Scope.apk -O prev.apk --clobber || echo "no previous APK"
+          python windows/ScopeApp/prepare_web.py
+
+      - name: Build
+        run: dotnet build windows/ScopeApp/ScopeApp.csproj -c Release -o out -p:Version=1.0.${{ github.run_number }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Remove-Item out\*.pdb -ErrorAction SilentlyContinue
+          if (!(Test-Path out\MedicaMallScopeCapture.exe)) { throw "exe missing" }
+          if (!(Test-Path out\web\index.html)) { throw "exam screen missing" }
+          if (!(Test-Path out\drivers\SmiGrabberDriver.exe)) { throw "driver missing" }
+          Compress-Archive -Path out\* -DestinationPath MedicaMallScope-Capture.zip -Force
+          Set-Content -Path version.json -Value '{"version": ${{ github.run_number }}}' -Encoding ascii
+          Get-ChildItem out -Recurse | Format-Table FullName, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MedicaMallScope-Capture
+          path: MedicaMallScope-Capture.zip
+
+      - name: Publish download link
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view capture-test >/dev/null 2>&1; then
+            gh release upload capture-test MedicaMallScope-Capture.zip version.json --clobber
+          else
+            gh release create capture-test MedicaMallScope-Capture.zip version.json --title "Medica Mall Scope – USB video capture dongle (Windows, test)" --notes "Separate test build for the analog 1CH USB Video Capture dongle (SMI Grabber). Includes its Windows driver (tray menu → install driver)." --latest=false --prerelease
+          fi
