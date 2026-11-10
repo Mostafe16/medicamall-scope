@@ -707,6 +707,7 @@ namespace MedicaMallScope
             Width = 1280; Height = 820; StartPosition = FormStartPosition.CenterScreen; WindowState = FormWindowState.Maximized;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             Controls.Add(web);
+            BuildDriverBar();
             try
             {
                 using (var s = Assembly.GetExecutingAssembly().GetManifestResourceStream("win-shim.js"))
@@ -775,6 +776,31 @@ namespace MedicaMallScope
             EnsureInit();
             BeginInvoke(new Action(Tick));
             if (inited && web.CoreWebView2 != null && DateTime.Now - lastUpdateCheck > TimeSpan.FromHours(6)) CheckUpdates();
+        }
+
+        // top bar: "install the capture card driver" button, always visible + the card's status
+        readonly Panel driverBar = new Panel { Dock = DockStyle.Top, Height = 46, BackColor = Color.FromArgb(255, 244, 214), RightToLeft = RightToLeft.Yes };
+        readonly Label driverLbl = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, Font = new Font("Segoe UI", 11f), ForeColor = Color.FromArgb(10, 63, 125), Padding = new Padding(0, 0, 12, 0) };
+        readonly Button driverBtn = new Button { Dock = DockStyle.Right, Width = 260, Text = "⬇  تسطيب تعريف كارت الكاميرا", Font = new Font("Segoe UI", 11f, FontStyle.Bold),
+                                                 BackColor = Color.FromArgb(255, 193, 7), ForeColor = Color.FromArgb(10, 63, 125), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand };
+        void BuildDriverBar()
+        {
+            driverBtn.FlatAppearance.BorderSize = 0;
+            driverBtn.Click += (s, e) => GrabberDriver.Install(this);
+            driverBar.Padding = new Padding(8, 6, 8, 6);
+            driverBar.Controls.Add(driverLbl);
+            driverBar.Controls.Add(driverBtn);
+            Controls.Add(driverBar);
+            UpdateDriverBar();
+        }
+
+        void UpdateDriverBar()
+        {
+            bool ok = cam.Running && cam.IsGrab;
+            driverBar.BackColor = ok ? Color.FromArgb(220, 245, 226) : Color.FromArgb(255, 244, 214);
+            driverLbl.Text = ok ? "✓ كارت الكاميرا شغال" + (cam.W > 0 ? " (" + cam.W + "×" + cam.H + ")" : "")
+                               : cam.Running ? "المنظار شغال. لكارت الكاميرا: سطّب التعريف لو أول مرة، ووصّل الكارت."
+                               : "كارت الكاميرا مش ظاهر: دوس «تسطيب تعريف كارت الكاميرا» لو أول مرة، وبعدين شيل الكارت ورجّعه في الـ USB.";
         }
 
         void RestartCam()
@@ -1056,7 +1082,7 @@ namespace MedicaMallScope
                     else nextStartTry = DateTime.Now.AddSeconds(10);
                 }
             }
-            finally { if (dev != null) dev.Dispose(); }
+            finally { if (dev != null) dev.Dispose(); try { UpdateDriverBar(); } catch { } }
         }
     }
 }
