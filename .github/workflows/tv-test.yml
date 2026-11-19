@@ -60,10 +60,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"url\": \"https://github.com/${GITHUB_REPOSITORY}/releases/download/tv-test/MedicaMall-Scope-TV-Test.apk\"}" > version.json
           if gh release view tv-test >/dev/null 2>&1; then
             gh release upload tv-test MedicaMall-Scope-TV-Test.apk --clobber
+            gh release upload tv-test version.json --clobber
           else
-            gh release create tv-test MedicaMall-Scope-TV-Test.apk \
+            gh release create tv-test MedicaMall-Scope-TV-Test.apk version.json \
               --title "Medica Mall Scope - TV Box Test" \
               --notes "Side-by-side X96/TV-box diagnostic build with native D-pad controls, full-screen native preview, safe UVC resolution selection, frame/FPS status, Wi-Fi view and rotation." \
               --prerelease

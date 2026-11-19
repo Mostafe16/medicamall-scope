@@ -367,7 +367,8 @@ public class MainActivity extends Activity {
         handleUsbIntent(getIntent());
         ui.postDelayed(this::openFirstUvc, 1200);
         Updates.checkWeb(this, () -> js("webupdate"));
-        // Side-by-side Wi-Fi test build: do not invoke the production APK updater.
+        // TV test build: checks its own tv-test release (never the production APK).
+        ui.postDelayed(() -> Updates.checkApp(MainActivity.this), 5000);
     }
 
     // ================= permissions =================

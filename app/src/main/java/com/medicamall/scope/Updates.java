@@ -38,6 +38,20 @@ public class Updates {
     static final String BASE = "https://github.com/Mostafe16/medicamall-scope/releases/download/app/";
     static final String VERSION_URL = BASE + "version.json";
     static final String APK_URL = BASE + "MedicaMall-Scope.apk";
+    /** TV test build updates only from its own pre-release, so it never jumps to another app id. */
+    static final String TV_BASE = "https://github.com/Mostafe16/medicamall-scope/releases/download/tv-test/";
+
+    static boolean isTvTest(Context c) {
+        return c.getPackageName().endsWith(".tvtest");
+    }
+
+    static String versionUrl(Context c) {
+        return isTvTest(c) ? TV_BASE + "version.json" : VERSION_URL;
+    }
+
+    static String apkUrl(Context c) {
+        return isTvTest(c) ? TV_BASE + "MedicaMall-Scope-TV-Test.apk" : APK_URL;
+    }
     static final String UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36 MedicaMallScope";
     static final String SHIM = "<script src=\"native-shim.js\"></script>";
     static final String SESSION_BRIDGE =
@@ -118,9 +132,9 @@ public class Updates {
     static void checkApp(Activity a) {
         new Thread(() -> {
             try {
-                JSONObject j = new JSONObject(new String(get(VERSION_URL), StandardCharsets.UTF_8));
+                JSONObject j = new JSONObject(new String(get(versionUrl(a) + "?t=" + System.currentTimeMillis()), StandardCharsets.UTF_8));
                 long remote = j.getLong("versionCode");
-                String apk = j.optString("url", APK_URL);
+                String apk = j.optString("url", apkUrl(a));
                 if (remote > currentVersion(a)) a.runOnUiThread(() -> showDialog(a, apk));
             } catch (Throwable ignored) { }
         }).start();
