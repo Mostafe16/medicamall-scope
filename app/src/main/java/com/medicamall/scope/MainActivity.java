@@ -2190,6 +2190,7 @@ public class MainActivity extends Activity {
         super.onResume();
         BoxMode.immersive(this);
         Updates.onResume(this);
+        BoxMode.ensureDefaultHome(this);
     }
 
     @Override

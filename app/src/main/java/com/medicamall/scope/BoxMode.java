@@ -43,9 +43,34 @@ final class BoxMode {
         prefs(c).edit().putBoolean(KEY_AUTOSTART, on).apply();
     }
 
+    /** Home mode is on unless the technician switched it off (manifest default = enabled). */
     static boolean homeMode(Context c) {
         int s = c.getPackageManager().getComponentEnabledSetting(new ComponentName(c, HOME_ALIAS));
-        return s == PackageManager.COMPONENT_ENABLED_STATE_ENABLED;
+        return s != PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                && s != PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER;
+    }
+
+    /** True when this app is already the box's default home screen. */
+    static boolean isDefaultHome(Context c) {
+        Intent home = new Intent(Intent.ACTION_MAIN);
+        home.addCategory(Intent.CATEGORY_HOME);
+        android.content.pm.ResolveInfo ri =
+                c.getPackageManager().resolveActivity(home, PackageManager.MATCH_DEFAULT_ONLY);
+        return ri != null && ri.activityInfo != null
+                && c.getPackageName().equals(ri.activityInfo.packageName);
+    }
+
+    private static boolean homeAskedThisRun = false;
+
+    /**
+     * First launch in home mode: Android needs the user to confirm the launcher once,
+     * so open the home chooser (once per app start) until Medica Mall is the default.
+     */
+    static void ensureDefaultHome(Activity a) {
+        if (homeAskedThisRun || !homeMode(a) || isDefaultHome(a)) return;
+        homeAskedThisRun = true;
+        toast(a, "اختار «Medica Mall Scope Box» ثم «دايماً» علشان الجهاز يفتح عليها على طول");
+        openHomeChooser(a);
     }
 
     static void setHomeMode(Context c, boolean on) {

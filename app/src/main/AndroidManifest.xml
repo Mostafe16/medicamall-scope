@@ -40,12 +40,12 @@
                 android:resource="@xml/mm_usb_filter" />
         </activity>
 
-        <!-- Scope Box: optional "dedicated device" mode. Disabled by default;
-             the technician menu enables it so the box boots straight into the scope screen. -->
+        <!-- Scope Box: "dedicated device" mode. ON by default so the box boots straight into
+             the Medica Mall screen; the technician menu (PIN) can switch it off. -->
         <activity-alias
             android:name=".ScopeHome"
             android:targetActivity=".MainActivity"
-            android:enabled="false"
+            android:enabled="true"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
