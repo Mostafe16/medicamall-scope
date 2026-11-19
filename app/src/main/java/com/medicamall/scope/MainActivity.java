@@ -1184,7 +1184,9 @@ public class MainActivity extends Activity {
             return;
         }
         if (BoxMode.homeMode(this)) {
-            toast("الجهاز مخصص للمنظار • للخروج: اضغط مطوّل على «خروج» وادخل كود الفني");
+            // Many TV-box remotes never send a long-press, so in dedicated mode a normal
+            // press on «خروج» goes straight to the PIN-protected technician menu.
+            BoxMode.askPin(this, this::finish);
             return;
         }
         new AlertDialog.Builder(this)
@@ -2155,7 +2157,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (BoxMode.homeMode(this)) {
-            toast("الجهاز مخصص للمنظار • للخروج: اضغط مطوّل على «خروج» وادخل كود الفني");
+            toast("الجهاز مخصص للمنظار • للخروج: اضغط «خروج» وادخل كود الفني");
             return;
         }
         long now = SystemClock.uptimeMillis();
